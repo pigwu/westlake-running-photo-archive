@@ -4,6 +4,7 @@ import { uploadStoredFile, uploadName } from "./upload.js";
 const RECORD = /^__run_album_v1_(legacy|[a-f0-9]{32})_([a-f0-9]{32})\.json$/;
 const PHOTO = /^__run_photo_([a-f0-9]{32})__/;
 const ASSIGNMENT = /^__run_assignment_v1_[a-f0-9]{32}\.json$/;
+const VISIBILITY = /^__run_visibility_v1_[a-f0-9]{32}\.json$/;
 const id = () => crypto.randomUUID().replaceAll("-", "");
 export function validateAlbumTitle(title) {
   const value = title.trim();
@@ -18,8 +19,9 @@ export function albumPhotoName(file, date, activity, albumId) {
   if (tagged.length > 255) throw new Error("照片文件名过长，请改名后选择");
   return tagged;
 }
-export function albumFiles(files, albumId, assignments = {}) {
+export function albumFiles(files, albumId, assignments = {}, visibility = {}, recycled = false) {
   return files.filter(f => /\.(jpe?g|png|webp|gif)$/i.test(f.name) &&
+    Boolean(visibility[f.docid]) === recycled &&
     (assignments[f.docid] || f.name.match(PHOTO)?.[1] || "legacy") === (albumId || "legacy"));
 }
 export function latestRecords(files) {
@@ -50,9 +52,10 @@ export async function loadLibrary(sources, signal) {
     const info = await shareRequest(session.link, session.password, "get", {}, signal);
     if (info.size !== -1) return [{ ...source, sourceId: source.id, albumId: "legacy", canUpload: false }];
     const listing = await shareRequest(session.link, session.password, "listdir", { docid: info.docid, attr: [], by: "name", sort: "asc" }, signal);
-    const records = [...latestRecords(listing.files), ...listing.files.filter(f => ASSIGNMENT.test(f.name)).map(f => [null, f])];
+    const records = [...latestRecords(listing.files), ...listing.files.filter(f => ASSIGNMENT.test(f.name) || VISIBILITY.test(f.name)).map(f => [null, f])];
     const metadata = [];
     const movements = [];
+    const changes = [];
     let next = 0;
     await Promise.all(Array.from({ length: Math.min(4, records.length) }, async () => {
       while (next < records.length) {
@@ -63,7 +66,10 @@ export async function loadLibrary(sources, signal) {
         if (!response.ok) throw new Error("相册信息读取失败，请刷新重试");
         const record = await response.json();
         if (albumId) metadata.push(validRecord(record, albumId));
-        else {
+        else if (VISIBILITY.test(file.name)) {
+          validateVisibility(record, info.docid);
+          changes.push({ ...record, file });
+        } else {
           if (record?.version !== 1 || !/^(legacy|[a-f0-9]{32})$/.test(record.albumId) || !Array.isArray(record.docids) || record.docids.length > 100 ||
             record.docids.some(d => typeof d !== "string" || !d.startsWith(`${info.docid}/`))) throw new Error("照片分类信息无效，请刷新重试");
           movements.push({ ...record, file });
@@ -72,11 +78,52 @@ export async function loadLibrary(sources, signal) {
     }));
     if (!metadata.some(m => m.id === "legacy")) metadata.push({ id: "legacy", title: source.title, date: source.date || "", createdAt: "1970-01-01T00:00:00Z" });
     const assignments = resolveAssignments(movements);
+    const visibility = resolveVisibility(changes);
     return metadata.filter(record => !record.archived).map(record => ({ ...source, ...record, id: `${source.id}:${record.id}`, sourceId: source.id,
       albumId: record.id, activity: record.title, rootDocid: info.docid, canUpload: Boolean(info.perm & 4),
-      assignments, photoCount: albumFiles(listing.files, record.id, assignments).length, description: record.id === "legacy" ? "原有照片" : "活动照片 · 原图存于学校网盘" }));
+      assignments, visibility, photoCount: albumFiles(listing.files, record.id, assignments, visibility).length,
+      recycledCount: albumFiles(listing.files, record.id, assignments, visibility, true).length,
+      description: record.id === "legacy" ? "原有照片" : "活动照片 · 原图存于学校网盘" }));
   }));
   return sortAlbums(groups.flat());
+}
+function validateVisibility(record, rootDocid) {
+  if (record?.version !== 1 || typeof record.deleted !== "boolean" || !Array.isArray(record.docids) ||
+    !record.docids.length || record.docids.length > 100 || record.docids.some(d => typeof d !== "string" || !d.startsWith(`${rootDocid}/`))) {
+    throw new Error("照片回收站记录无效，请刷新重试");
+  }
+}
+export function resolveVisibility(changes) {
+  const result = {};
+  for (const record of [...changes].sort((a, b) => Number(a.file.create_time || a.file.modified || 0) - Number(b.file.create_time || b.file.modified || 0) || a.file.name.localeCompare(b.file.name))) {
+    for (const docid of record.docids) result[docid] = record.deleted;
+  }
+  return result;
+}
+// Share links cannot call the authenticated file/delete endpoint. Append shared
+// visibility records instead, keeping originals and face indices recoverable.
+export async function setPhotosDeleted(source, docids, deleted, options = {}) {
+  const record = { version: 1, deleted, docids: [...new Set(docids)] };
+  const session = { link: parseShare(source.url), password: source.accessPassword || "" };
+  const info = await shareRequest(session.link, session.password, "get", {}, options.signal);
+  if (!(info.perm & 4) || info.size !== -1) throw new Error("当前分享没有保存删除或恢复记录的权限");
+  validateVisibility(record, info.docid);
+  const folders = [...new Set(record.docids.map(d => d.slice(0, d.lastIndexOf("/"))))];
+  const listings = [];
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(4, folders.length) }, async () => {
+    while (next < folders.length) {
+      const docid = folders[next++];
+      listings.push(await shareRequest(session.link, session.password, "listdir", { docid, attr: [], by: "name", sort: "asc" }, options.signal));
+    }
+  }));
+  // Only existing photos are eligible; metadata files must never be recycled.
+  const photos = new Set(listings.flatMap(listing => listing.files).filter(f => /\.(jpe?g|png|webp|gif)$/i.test(f.name)).map(f => f.docid));
+  if (record.docids.some(d => !photos.has(d))) throw new Error("所选照片已不存在，请刷新后重试");
+  const name = `__run_visibility_v1_${id()}.json`;
+  const file = new File([JSON.stringify(record)], name, { type: "application/json" });
+  if (file.size > 32768) throw new Error("删除记录过大，请减少所选照片数量");
+  await uploadStoredFile(session, info.docid, file, name, options);
 }
 export function resolveAssignments(movements) {
   const result = {};

@@ -1,15 +1,16 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, LockKeyhole, ScanFace, X, Download, Upload } from "lucide-react";
+import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, X, Download, Upload, Trash2, RotateCcw } from "lucide-react";
 import { isExpired, parseShare, shareRequest, originalDownload } from "./westlake";
 import PersonFinder from "./PersonFinder";
 import { photoLabel } from "./upload";
 import Uploader from "./Uploader";
 import AlbumEditor from "./AlbumEditor";
+import PhotoRemovalDialog from "./PhotoRemovalDialog";
 import { loadLibrary, albumFiles, assignPhotos } from "./albums.js";
 import "./shared.css";
 
-function Thumb({ file, session, onReady, hidden, selectable, selected, onSelect, selectionDisabled }) {
+function Thumb({ file, session, onReady, hidden, selectable, selected, onSelect, selectionDisabled, onRemove, recycled }) {
   const label = photoLabel(file.name);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
@@ -42,7 +43,7 @@ function Thumb({ file, session, onReady, hidden, selectable, selected, onSelect,
       }).catch(e => { if (!abort.signal.aborted) setError(e.message); });
     return () => { abort.abort(); if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [file.docid, file.rev, session]);
-  return <div className="photo" hidden={hidden}><div className="photo-image">{selectable && <label className="photo-select"><input type="checkbox" aria-label={`选择照片 ${label.originalName}`} checked={selected} disabled={selectionDisabled} onChange={onSelect} /></label>}{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date}{label.activity && ` · ${label.activity}`}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
+  return <div className="photo" hidden={hidden}><div className="photo-image">{selectable && <label className="photo-select"><input type="checkbox" aria-label={`选择照片 ${label.originalName}`} checked={selected} disabled={selectionDisabled} onChange={onSelect} /></label>}{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date}{label.activity && ` · ${label.activity}`}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{onRemove && <div className="photo-manage"><button className={recycled ? "subtle" : "danger-subtle"} disabled={selectionDisabled} aria-label={`${recycled ? "恢复" : "删除"}照片 ${label.originalName}`} onClick={onRemove}>{recycled ? <RotateCcw size={14} /> : <Trash2 size={14} />}{recycled ? "恢复照片" : "删除照片"}</button></div>}{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
 }
 
 function SharedArchive() {
@@ -56,6 +57,11 @@ function SharedArchive() {
   const [selectedPhotos, setSelectedPhotos] = useState([]);
   const [moveTarget, setMoveTarget] = useState("");
   const [moving, setMoving] = useState(false);
+  const [recycled, setRecycled] = useState(false);
+  const [removal, setRemoval] = useState(null);
+  const [removing, setRemoving] = useState(false);
+  const [notice, setNotice] = useState("");
+  const mutation = useRef(false);
   const [configError, setConfigError] = useState("");
   const [query, setQuery] = useState("");
   const [activity, setActivity] = useState("");
@@ -72,7 +78,7 @@ function SharedArchive() {
   const urls = useRef(new Map());
   const generation = useRef(0);
   useEffect(() => {
-    const route = () => { closeAlbum(); setView(location.hash === "#/upload" ? "upload" : "gallery"); };
+    const route = () => { if (mutation.current) { history.replaceState(null, "", "#/"); return; } closeAlbum(); setView(location.hash === "#/upload" ? "upload" : "gallery"); };
     window.addEventListener("hashchange", route);
     return () => window.removeEventListener("hashchange", route);
   }, []);
@@ -107,7 +113,7 @@ function SharedArchive() {
     const target = albums.find(a => a.id === moveTarget);
     if (!target || target.sourceId !== album.sourceId) return;
     const version = generation.current;
-    setMoving(true); setError("");
+    mutation.current = true; setMoving(true); setError("");
     try {
       await assignPhotos(sources.find(s => s.id === album.sourceId), target.albumId, selectedPhotos);
       const library = await refreshAlbums();
@@ -115,13 +121,42 @@ function SharedArchive() {
       setAlbum(library.find(a => a.id === album.id)); clearView(); setSession(s => ({ ...s }));
       setSelectedPhotos([]); setSelecting(false);
     } catch (e) { setError(e.message); }
-    finally { setMoving(false); }
+    finally { mutation.current = false; setMoving(false); }
+  }
+  async function refreshGallery() {
+    const version = generation.current;
+    setBusy(true); setError("");
+    try {
+      const library = await refreshAlbums();
+      const data = await shareRequest(session.link, session.password, "listdir", { docid: trail.at(-1).docid, attr: [], by: "name", sort: "asc" });
+      if (version !== generation.current) return;
+      setAlbum(library.find(a => a.id === album.id)); setListing(data);
+      setBusy(false); clearView(); setSelectedPhotos([]);
+    } catch (e) { if (version === generation.current) setError(e.message); }
+    finally { if (version === generation.current) setBusy(false); }
+  }
+  async function removedPhotos() {
+    // Apply the committed record immediately. A failed refresh must never
+    // report the write as failed or encourage duplicate submissions.
+    const docids = removal.photos.map(p => p.docid), deleted = removal.deleted;
+    const visibility = { ...album.visibility };
+    docids.forEach(d => { visibility[d] = deleted; });
+    const updated = { ...album, visibility };
+    setAlbum(updated); clearView(); setSelectedPhotos([]); setSelecting(false); setRemoval(null);
+    setNotice(deleted ? `已将 ${docids.length} 张照片移入网站回收站。` : `已恢复 ${docids.length} 张照片。`);
+    const version = generation.current;
+    try {
+      const library = await refreshAlbums();
+      if (version === generation.current) setAlbum(library.find(a => a.id === updated.id) || updated);
+    } catch {
+      if (version === generation.current) { setConfigError(""); setError("删除或恢复记录已保存，列表刷新失败。请点「刷新照片」重试，无需重复操作。"); }
+    }
   }
   function clearView() {
     generation.current++; urls.current.clear(); setMatchedPhotos(null);
   }
   function closeAlbum() {
-    clearView(); setAlbum(null); setSession(null); setPassword(""); setError(""); setListing({ dirs: [], files: [] }); setTrail([]); setBusy(false); setSelectedPhotos([]); setSelecting(false); setMoveTarget("");
+    clearView(); setAlbum(null); setSession(null); setPassword(""); setError(""); setListing({ dirs: [], files: [] }); setTrail([]); setBusy(false); setSelectedPhotos([]); setSelecting(false); setMoveTarget(""); setRecycled(false); setRemoval(null); setNotice("");
   }
   useEffect(() => {
     if (album && !session) { setNeedsPassword(false); unlock(null, album.accessPassword || ""); }
@@ -139,7 +174,7 @@ function SharedArchive() {
     finally { if (version === generation.current) setBusy(false); }
   }
   async function navigate(folder, nextTrail) {
-    clearView(); const version = generation.current; setBusy(true); setError("");
+    clearView(); setSelectedPhotos([]); const version = generation.current; setBusy(true); setError("");
     try {
       const data = await shareRequest(session.link, session.password, "listdir", { docid: folder.docid, attr: [], by: "name", sort: "asc" });
       if (version !== generation.current) return;
@@ -147,7 +182,14 @@ function SharedArchive() {
     } catch (e) { if (version === generation.current) setError(e.message); }
     finally { if (version === generation.current) setBusy(false); }
   }
-  const photos = albumFiles(listing.files, album?.albumId, album?.assignments);
+  const photos = albumFiles(listing.files, album?.albumId, album?.assignments, album?.visibility, recycled);
+  const recycledPhotos = albumFiles(listing.files, album?.albumId, album?.assignments, album?.visibility, true);
+  const visiblePhotos = photos.filter(p => recycled || matchedPhotos === null || matchedPhotos.includes(p.docid));
+  const locked = busy || moving || removing || Boolean(removal);
+  function requestRemoval(items) {
+    if (!items.length || !album.canUpload || locked) return;
+    setError(""); setNotice(""); setRemoval({ photos: items, deleted: !recycled });
+  }
   const filtered = albums.filter(a => `${a.title} ${a.activity} ${a.description || ""}`.toLowerCase().includes(query.toLowerCase()) && (!activity || a.activity === activity) && (!month || a.date?.startsWith(month)));
   const [, setReadyCount] = useState(0);
   return <div className="shared-layout">
@@ -155,6 +197,7 @@ function SharedArchive() {
     <main><header><span>WESTLAKE RUNNING CLUB</span><span className="pill">学校网盘 · 在线读取</span></header>
       {configError && <p role="alert" className="error">{configError}</p>}
       {editor && <AlbumEditor key={editor.album?.id || "new"} sources={sources} album={editor.album} onClose={() => setEditor(null)} onSaved={savedAlbum} />}
+      {removal && <PhotoRemovalDialog source={sources.find(s => s.id === album.sourceId)} photos={removal.photos} deleted={removal.deleted} onClose={() => setRemoval(null)} onBusy={value => { mutation.current = value; setRemoving(value); }} onSaved={removedPhotos} />}
       {view === "upload" ? <Uploader albums={albums} selectedAlbumId={uploadAlbumId} onCreate={() => setEditor({})} onRename={a => setEditor({ album: a })} onOpen={(a, s, data, path) => {
         clearView(); history.replaceState(null, "", "#/"); setView("gallery"); setAlbum(a); setSession(s); setListing(data); setTrail(path);
       }} /> : !album ? <>
@@ -164,12 +207,14 @@ function SharedArchive() {
         <div className="album-grid">{filtered.map((a, i) => <article key={a.id} className="album-card"><div className="album-art"><span className="art-ring" /><Camera size={54} strokeWidth={1} /><span className="art-number">{String(i + 1).padStart(2, "0")}</span><span className="art-label">RUN / REMEMBER / REPEAT</span></div><div className="album-content"><span className="activity">{a.photoCount ?? "—"} 张照片</span><h2>{a.title}</h2><p>{a.description}</p><div className="meta"><CalendarDays size={15} />{a.date || "拍摄日期待标记"}</div><div className="card-bottom"><small>{isExpired(a) ? "分享已到期" : a.expiresAt ? `有效至 ${new Date(a.expiresAt).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" })}` : "以网盘分享设置为准"}</small><div className="card-buttons"><button className="subtle" disabled={isExpired(a) || !a.canUpload} aria-label={`重命名相册 ${a.title}`} onClick={() => setEditor({ album: a })}>改名</button><button disabled={isExpired(a)} onClick={() => { clearView(); setReadyCount(0); setAlbum(a); }}>浏览相册 <ArrowUpRight size={17} /></button></div></div></div></article>)}</div>
         {!configError && !loadingAlbums && filtered.length === 0 && <div className="empty">没有符合条件的相册。</div>}
       </> : <>
-        <button className="back" disabled={moving} onClick={() => { closeAlbum(); refreshAlbums().catch(() => {}); }}><ArrowLeft size={17} />全部相册</button><div className="album-heading"><div><span className="eyebrow">{album.activity}</span><h1>{album.title}</h1><p>{album.date || "拍摄日期待标记"}</p></div><a className="external" href={album.url} target="_blank" rel="noopener noreferrer">在网盘中打开 <ArrowUpRight size={17} /></a></div>
+        <button className="back" disabled={locked} onClick={() => { closeAlbum(); refreshAlbums().catch(() => {}); }}><ArrowLeft size={17} />全部相册</button><div className="album-heading"><div><span className="eyebrow">{album.activity}</span><h1>{album.title}{recycled && " · 回收站"}</h1><p>{album.date || "拍摄日期待标记"}</p></div><a className="external" href={album.url} target="_blank" rel="noopener noreferrer">在网盘中打开 <ArrowUpRight size={17} /></a></div>
         {!session ? <form className="unlock" onSubmit={unlock}><FolderOpen size={28} /><h2>{needsPassword ? "更新相册连接" : "连接学校网盘"}</h2><p>无需填写密码，自动打开共享照片。</p>{needsPassword && <label>分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} autoFocus placeholder="输入更新后的分享密码" /></label>}<button disabled={busy}>{busy ? "正在连接学校网盘…" : "打开照片"}</button></form> : <>
-          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={busy || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{photos.length} 张照片</span><button className="subtle" disabled={moving} onClick={() => { setSelecting(!selecting); setSelectedPhotos([]); }}>{selecting ? "取消选择" : "选择照片分类"}</button><button className="subtle" disabled={moving} onClick={() => { clearView(); setReadyCount(0); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />断开连接</button></div>
-          {selecting && <div className="photo-assignment"><span>已选 {selectedPhotos.length} 张</span><button className="subtle" disabled={moving} onClick={() => setSelectedPhotos(photos.slice(0, 100).map(p => p.docid))}>全选当前相册（最多100张）</button><select aria-label="照片分类目标相册" value={moveTarget} disabled={moving} onChange={e => setMoveTarget(e.target.value)}><option value="">选择目标相册</option>{albums.filter(a => a.sourceId === album.sourceId && a.id !== album.id).map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select><button disabled={moving || !moveTarget || !selectedPhotos.length || !album.canUpload} onClick={movePhotos}>{moving ? "保存分类中…" : "移入相册"}</button></div>}
-          <PersonFinder key={`${album.id}|${trail.at(-1)?.docid}`} session={session} album={album} photos={photos} onFilter={setMatchedPhotos} />
-          {busy ? <p>正在读取文件夹…</p> : <><div className="folders">{listing.dirs.map(d => <button key={d.docid} onClick={() => navigate(d, [...trail, d])}><FolderOpen size={20} />{d.name}</button>)}</div><div className="photo-grid">{photos.map(file => <Thumb key={file.docid} file={file} session={session} selectable={selecting} selectionDisabled={moving} selected={selectedPhotos.includes(file.docid)} onSelect={() => setSelectedPhotos(items => items.includes(file.docid) ? items.filter(i => i !== file.docid) : items.length < 100 ? [...items, file.docid] : items)} hidden={matchedPhotos !== null && !matchedPhotos.includes(file.docid)} onReady={(id, url) => { urls.current.set(id, url); setReadyCount(n => n + 1); }} />)}</div>{photos.length === 0 && <div className="empty">这个相册还没有照片，去上传页选择此相册即可添加。</div>}</>}
+          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={locked || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{visiblePhotos.length} 张照片</span><button className="subtle" disabled={locked || !album.canUpload} onClick={() => { setSelecting(!selecting); setSelectedPhotos([]); }}>{selecting ? "取消选择" : "选择照片"}</button><button className="subtle" disabled={locked} onClick={() => { clearView(); setRecycled(!recycled); setSelectedPhotos([]); setSelecting(false); setNotice(""); }}>{recycled ? "返回照片" : `回收站（${recycledPhotos.length}）`}</button><button className="subtle" disabled={locked} onClick={refreshGallery}>刷新照片</button><button className="subtle" disabled={locked} onClick={() => { clearView(); setReadyCount(0); setSelectedPhotos([]); setSelecting(false); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />断开连接</button></div>
+          {notice && <p className="upload-result" role="status">{notice}</p>}
+          {recycled && <p className="upload-help">回收站保留网盘原图，可恢复到原相册。要彻底删除并释放空间，请由网盘所有者登录学校网盘处理。</p>}
+          {selecting && <div className="photo-assignment"><span>已选 {selectedPhotos.length} 张</span><button className="subtle" disabled={locked} onClick={() => setSelectedPhotos(visiblePhotos.slice(0, 100).map(p => p.docid))}>全选当前显示（最多100张）</button>{!recycled && <><select aria-label="照片分类目标相册" value={moveTarget} disabled={locked} onChange={e => setMoveTarget(e.target.value)}><option value="">选择目标相册</option>{albums.filter(a => a.sourceId === album.sourceId && a.id !== album.id).map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select><button disabled={locked || !moveTarget || !selectedPhotos.length || !album.canUpload} onClick={movePhotos}>{moving ? "保存分类中…" : "移入相册"}</button></>}<button className={recycled ? "" : "danger"} disabled={locked || !selectedPhotos.length || !album.canUpload} onClick={() => requestRemoval(visiblePhotos.filter(p => selectedPhotos.includes(p.docid)))}>{recycled ? "恢复所选" : "删除所选"}（{selectedPhotos.length}）</button></div>}
+          {!recycled && <PersonFinder key={`${album.id}|${trail.at(-1)?.docid}`} session={session} album={album} photos={photos} onFilter={ids => { setMatchedPhotos(ids); setSelectedPhotos([]); }} />}
+          {busy ? <p>正在读取文件夹…</p> : <><div className="folders">{listing.dirs.map(d => <button key={d.docid} disabled={locked} onClick={() => navigate(d, [...trail, d])}><FolderOpen size={20} />{d.name}</button>)}</div><div className="photo-grid">{photos.map(file => <Thumb key={file.docid} file={file} session={session} selectable={selecting} selectionDisabled={locked} selected={selectedPhotos.includes(file.docid)} onSelect={() => setSelectedPhotos(items => items.includes(file.docid) ? items.filter(i => i !== file.docid) : items.length < 100 ? [...items, file.docid] : items)} onRemove={album.canUpload ? () => requestRemoval([file]) : undefined} recycled={recycled} hidden={!recycled && matchedPhotos !== null && !matchedPhotos.includes(file.docid)} onReady={(id, url) => { urls.current.set(id, url); setReadyCount(n => n + 1); }} />)}</div>{photos.length === 0 && <div className="empty">{recycled ? "回收站为空。" : "这个相册还没有照片，去上传页选择此相册即可添加。"}</div>}</>}
         </>}
         {error && <p className="error" role="alert">{error}</p>}
       </>}
