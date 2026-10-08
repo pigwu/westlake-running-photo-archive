@@ -33,13 +33,19 @@ export function boundedFaceCrop(box, width, height, padding = 0.18) {
   const x = Math.max(0, Math.min(width - 1, box.x - pad)), y = Math.max(0, Math.min(height - 1, box.y - pad));
   return { x, y, width: Math.max(1, Math.min(width, box.x + box.width + pad) - x), height: Math.max(1, Math.min(height, box.y + box.height + pad) - y) };
 }
-export function groupDetectedFaces(groups, faces, photoId) {
+export function groupDetectedFaces(groups, faces, photoId, threshold = GROUP_THRESHOLD) {
   for (const face of faces) {
-    const distances = groups.map(g => g.photos.includes(photoId) ? Infinity : Math.sqrt(g.descriptor.reduce((sum, value, j) => sum + (value - face.descriptor[j]) ** 2, 0)));
-    const closest = Math.min(...distances);
-    const group = closest < 0.5 ? groups[distances.indexOf(closest)] : null;
-    if (group) group.photos.push(photoId);
-    else groups.push({ ...face, name: `人物 ${groups.length + 1}`, photos: [photoId] });
+    const scores = groups.map(g => {
+      if (g.photos.includes(photoId)) return -1;
+      const scores=(g.descriptors || [g.descriptor]).map(d => cosineSimilarity(d,face.descriptor));
+      // Average linkage with a pairwise floor avoids single-face chain merges.
+      return Math.min(...scores) < .3 ? -1 : scores.reduce((sum,v)=>sum+v,0)/scores.length;
+    });
+    const closest = Math.max(...scores);
+    const group = closest >= threshold ? groups[scores.indexOf(closest)] : null;
+    if (group) { group.photos.push(photoId); (group.descriptors ||= [group.descriptor]).push(face.descriptor); }
+    else groups.push({ ...face, name: `人物 ${groups.length + 1}`, photos: [photoId], descriptors:[face.descriptor] });
   }
   return groups;
 }
+import { cosineSimilarity, GROUP_THRESHOLD } from "./sface-utils.js";

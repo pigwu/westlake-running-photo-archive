@@ -20,6 +20,7 @@ export default function Uploader({ albums, onOpen, onCreate, onRename, selectedA
   const [activity, setActivity] = useState("");
   const [queue, setQueue] = useState([]);
   const [running, setRunning] = useState(false);
+  const [buildIndex, setBuildIndex] = useState(true);
   const [result, setResult] = useState("");
   const operation = useRef(null);
   const fileInput = useRef(null);
@@ -81,11 +82,11 @@ export default function Uploader({ albums, onOpen, onCreate, onRename, selectedA
       const item = pending[i]; update(item.id, { status: "uploading", progress: 0, message: "正在上传" });
       try {
         const result = await uploadPhotoWithIndex(session, folder, album.rootDocid || trail[0].docid, item.file, names[i], {
-          signal: abort.signal, onProgress: progress => update(item.id, { progress }),
-          onPhotoStored: () => update(item.id, { status: "indexing", progress: 100, message: "原图已保存，正在建立人脸索引…", storedName: names[i] }),
+          signal: abort.signal, buildIndex, onProgress: progress => update(item.id, { progress }),
+          onPhotoStored: () => update(item.id, { status: buildIndex ? "indexing" : "uploading", progress: 100, message: "原图已保存", storedName: names[i] }),
           onIndexProgress: message => update(item.id, { message: `原图已保存 · ${message}` }),
         });
-        success++; update(item.id, { status: "done", progress: 100, message: result.indexed ? `已保存到学校网盘 · 人脸索引已建立（${result.faceCount} 张脸）` : `原图已保存，人脸索引${result.stopped ? "已停止" : "未完成"}，可在相册中补建${result.stopped ? "" : `：${result.indexError}`}` });
+        success++; update(item.id, { status: "done", progress: 100, message: result.indexed ? `已保存到学校网盘 · 人脸索引已建立（${result.faceCount} 张清晰脸）` : result.deferred ? "原图已保存，可稍后由电脑补建人脸索引" : `原图已保存，人脸索引${result.stopped ? "已停止" : "未完成"}，可在相册中补建${result.stopped ? "" : `：${result.indexError}`}` });
       } catch (e) {
         if (abort.signal.aborted) { update(item.id, { status: "pending", progress: 0, message: "已取消，可重试" }); break; }
         failed++; update(item.id, { status: "error", message: e.message, progress: 0 });
@@ -109,7 +110,8 @@ export default function Uploader({ albums, onOpen, onCreate, onRename, selectedA
       <div className="upload-destination"><FolderOpen size={22} /><div><small>网盘存储位置</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />断开连接</button></div>
       {listing.dirs.length > 0 && <div className="folders">{listing.dirs.map(d => <button key={d.docid} disabled={running || connecting} onClick={() => navigate([...trail, d])}><FolderOpen size={18} />{d.name}</button>)}</div>}
       <div className="upload-fields"><label>活动名称（选填）<input value={activity} disabled={running} onChange={e => setActivity(e.target.value)} placeholder="不填则不标记活动" maxLength={40} /></label><label>拍摄日期<input type="date" value={date} disabled={running} onChange={e => setDate(e.target.value)} /></label></div>
-      <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。原始图片内容保持不变。上传后会自动建立共享人脸索引，计算期间请保持本页打开。</p>
+      <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。勾选下方选项后，上传会同时建立共享人脸索引，计算期间请保持本页打开。</p>
+      <label className="finder-strict"><input type="checkbox" checked={buildIndex} disabled={running} onChange={e => setBuildIndex(e.target.checked)} />上传后建立人脸索引</label><p className="upload-help">电脑、手机都可计算；首次需下载约 51 MB 模型和运行文件。手机较慢时可取消勾选，照片上传后再用电脑补建。</p>
       <input ref={fileInput} className="file-picker" type="file" aria-label="选择要上传的照片" accept=".jpg,.jpeg,.png,.webp,.gif" multiple disabled={running} onChange={e => { choose(e.target.files); e.target.value = ""; }} />
       <button className="upload-dropzone" disabled={running} onClick={() => fileInput.current.click()}><Upload size={32} /><strong>点击选择照片</strong><span>支持多选 · JPG / PNG / WebP / GIF · 每张最多 50 MB</span></button>
       {queue.length > 0 && <div className="upload-queue"><div className="queue-heading"><span>{queue.length} 张照片 · 已完成 {done} 张</span><button className="subtle" disabled={running} onClick={() => { setQueue(q => q.filter(i => i.status === "done")); setResult(""); }}>清除待上传项</button></div>{queue.map(item => <div key={item.id} className={`queue-row ${item.status}`}><div><strong>{item.file.name}</strong><small>{(item.file.size / 1024 / 1024).toFixed(1)} MB</small><p role={item.status === "error" ? "alert" : undefined}>{item.message}</p>{item.status === "uploading" && <progress value={item.progress} max="100" />}</div><span>{item.status === "done" ? <CheckCircle2 size={20} /> : item.status === "indexing" ? "建立索引中" : item.status === "uploading" ? `${item.progress}%` : <button className="subtle" aria-label={`移除 ${item.file.name}`} disabled={running} onClick={() => setQueue(q => q.filter(i => i.id !== item.id))}><X size={17} /></button>}</span></div>)}</div>}

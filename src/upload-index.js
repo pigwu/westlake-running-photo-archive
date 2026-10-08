@@ -1,9 +1,10 @@
 import { uploadPhoto } from "./upload.js";
 import { saveFaceIndex } from "./face-cache.js";
 
-export async function uploadPhotoWithIndex(session, folder, rootDocid, file, name, { signal, onProgress, onPhotoStored = () => {}, onIndexProgress = () => {}, transfer, indexTransfer, analyze } = {}) {
+export async function uploadPhotoWithIndex(session, folder, rootDocid, file, name, { signal, onProgress, onPhotoStored = () => {}, onIndexProgress = () => {}, transfer, indexTransfer, analyze, buildIndex = true } = {}) {
   const stored = await uploadPhoto(session, folder, file, name, { signal, onProgress, transfer });
   onPhotoStored(stored);
+  if (!buildIndex) return { stored, indexed:false, deferred:true };
   let url;
   try {
     url = URL.createObjectURL(file);

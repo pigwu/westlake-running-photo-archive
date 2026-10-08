@@ -13,17 +13,20 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   const [error, setError] = useState("");
   const [active, setActive] = useState("");
   const [references, setReferences] = useState([]);
+  const [legacyCount, setLegacyCount] = useState(0);
+  const [strict, setStrict] = useState(false);
   const operation = useRef(null), referenceInput = useRef(null);
+  const legacyKeys = useRef([]);
   const signature = photos.map(faceIndexKey).join("\n");
   useEffect(() => {
-    setLoaded(false); setIndices(new Map()); setReferences([]); setActive(""); onFilter(null);
+    setLoaded(false); setIndices(new Map()); setLegacyCount(0); setReferences([]); setActive(""); onFilter(null);
     return () => operation.current?.abort();
   }, [signature]);
   const groups = useMemo(() => {
     const found = [];
-    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid);
+    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid, strict ? .6 : .5);
     return found;
-  }, [indices, signature]);
+  }, [indices, signature, strict]);
   const indexed = photos.filter(p => indices.has(faceIndexKey(p))).length;
   const rootDocid = album.rootDocid || photos[0]?.docid.split("/").slice(0, 3).join("/");
   async function readIndex() {
@@ -33,7 +36,8 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     try {
       const data = await loadFaceIndices(session, rootDocid, photos, abort.signal);
       if (abort.signal.aborted) return;
-      setIndices(data.indices); setLoaded(true); setStatus("已读取共享索引，无需重新分析原图。");
+      legacyKeys.current = data.legacyKeys || [];
+      setIndices(data.indices); setLegacyCount(data.legacyCount || 0); setLoaded(true); setStatus(data.indices.size ? "已读取新版共享索引，已有索引的照片无需重新分析。" : "索引检查完成，请先补建新版人脸索引。");
       if (data.warnings.length) setError(`${data.warnings.length} 张照片的索引暂时无法读取，可重试或补建。`);
     } catch (e) { if (!abort.signal.aborted) setError(e.message); }
     finally { if (operation.current === abort) setBusy(false); }
@@ -66,6 +70,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
         } catch (e) { if (abort.signal.aborted) break; failed++; lastFailure = e.message; }
         finally { if (url) URL.revokeObjectURL(url); }
       }
+      setLegacyCount(legacyKeys.current.filter(key => !next.has(key)).length);
       setLoaded(true); setStatus(`${abort.signal.aborted ? "已停止。" : failed && !saved ? "补建失败。" : "补建完成。"}已保存 ${saved} 张照片的人脸索引。${saved ? "其他跑友可直接使用。" : ""}`);
       if (failed) setError(`${failed} 张索引建立失败：${lastFailure}`);
     } catch (e) {
@@ -89,7 +94,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     finally { URL.revokeObjectURL(url); if (operation.current === abort) setBusy(false); }
   }
   function selectReference(face, index) {
-    const matches = referencePhotoIds([face], indices, photos);
+    const matches = referencePhotoIds([face], indices, photos, strict ? .6 : .45);
     onFilter(matches); setActive(`reference-${index}`);
     setStatus(`找到 ${matches.length} 张相似照片。结果可能有遗漏或误匹配，请人工确认。`);
   }
@@ -97,9 +102,11 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     {!opened ? <button className="subtle" disabled={!photos.length || busy} onClick={readIndex}><ScanFace size={17} />按人找照片</button> : <>
       <div className="finder-heading"><h2><ScanFace size={20} />按人找照片</h2><button className="subtle" disabled={busy} aria-label="关闭人物筛选" onClick={() => { setOpened(false); setActive(""); onFilter(null); }}><X size={18} /></button></div>
       <p className="face-status">{loaded ? `${indexed}/${photos.length} 张照片已有共享索引 · ${groups.length} 个人物组` : "正在读取索引"}。索引包含人脸小图和特征，保存在当前公开网盘分享中。分组需人工确认。</p>
+      {legacyCount > 0 && <p className="upload-help">已升级人脸识别，{legacyCount} 张照片的旧索引需要补建一次，照片无需重新上传。</p>}
+      <label className="finder-strict"><input type="checkbox" checked={strict} disabled={busy} onChange={e => { setStrict(e.target.checked); setActive(""); onFilter(null); }} />更严格地匹配（减少误分，可能漏掉部分照片）</label>
       <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引</button><button disabled={busy || !loaded || indexed === photos.length || !album.canUpload} onClick={buildIndex}>补建人脸索引（{photos.length - indexed} 张）</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
       <input ref={referenceInput} className="file-picker" type="file" accept=".jpg,.jpeg,.png,.webp" aria-label="选择人脸参照照片" onChange={e => { chooseReference(e.target.files[0]); e.target.value = ""; }} />
-      <p className="upload-help">参照照片只在本机处理，不会上传。新照片上传后自动建立索引；旧照片点“补建人脸索引”。计算时请保持页面打开。</p>
+      <p className="upload-help">电脑、手机均在本机处理，参照照片不会上传。首次分析需下载约 51 MB 模型和运行文件。模糊、小脸和大角度侧脸会跳过；计算时保持页面打开。手机也可只上传照片，稍后由电脑补建。</p>
       {status && <p className="face-status" role="status">{status}</p>}{error && <p className="error" role="alert">{error}</p>}
       {references.length > 0 && <div className="reference-faces"><p>参照照片中的人脸：</p><div className="people">{references.map((face, i) => <button key={i} disabled={busy} className={active === `reference-${i}` ? "selected" : ""} onClick={() => selectReference(face, i)}><img src={face.avatar} alt="" />参照人脸 {i + 1}</button>)}</div></div>}
       <div className="people">{groups.map((group, i) => <button key={i} disabled={busy} className={active === `group-${i}` ? "selected" : ""} onClick={() => { onFilter(group.photos); setActive(`group-${i}`); }}><img src={group.avatar} alt="" />{group.name} · {group.photos.length} 张</button>)}</div>

@@ -13,14 +13,14 @@
     "test:pages": "node --test src/westlake.test.mjs src/upload.test.mjs src/albums.test.mjs src/faces.test.mjs"
   },
   "dependencies": {
-    "express": "^5.1.0",
-    "multer": "^2.0.2",
-    "sharp": "^0.35.5",
     "exifr": "^7.1.3",
+    "express": "^5.1.0",
+    "lucide-react": "^0.468.0",
+    "multer": "^2.0.2",
+    "onnxruntime-web": "1.24.3",
     "react": "^19.1.1",
     "react-dom": "^19.1.1",
-    "lucide-react": "^0.468.0",
-    "face-api.js": "^0.22.2"
+    "sharp": "^0.35.5"
   },
   "devDependencies": {
     "vite": "^7.1.7"

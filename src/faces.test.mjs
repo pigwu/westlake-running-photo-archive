@@ -6,6 +6,66 @@ import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, load
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
+import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor } from "./sface-utils.js";
+
+test("ONNX inputs retain raw pixel values in the model's expected channel order", () => {
+  const rgba=new Uint8ClampedArray([10,20,30,255,40,50,60,255]);
+  assert.deepEqual(Array.from(planarPixels(rgba,2,1,"RGB")),[10,40,20,50,30,60]);
+  assert.deepEqual(Array.from(planarPixels(rgba,2,1,"BGR")),[30,60,20,50,10,40]);
+});
+test("five-point alignment restores a known rotation, scale and translation", () => {
+  const points=ALIGN_POINTS.map(([x,y])=>[2*(.8*x-.6*y)+31,2*(.6*x+.8*y)-17]);
+  const [a,b,c,d,e,f]=similarityTransform(points);
+  points.forEach(([x,y],i)=>{
+    assert.ok(Math.abs(a*x+c*y+e-ALIGN_POINTS[i][0])<1e-6);
+    assert.ok(Math.abs(b*x+d*y+f-ALIGN_POINTS[i][1])<1e-6);
+  });
+  assert.throws(()=>similarityTransform(Array(5).fill([1,1])));
+});
+test("YuNet decodes grid boxes, landmarks and joint confidence", () => {
+  const outputs={};
+  for(const stride of[8,16,32])for(const [key,width] of[["cls",1],["obj",1],["bbox",4],["kps",10]])outputs[`${key}_${stride}`]={data:new Float32Array((64/stride)**2*width)};
+  const i=10; outputs.cls_8.data[i]=.81;outputs.obj_8.data[i]=1;
+  outputs.bbox_8.data.set([.5,.5,Math.log(2),Math.log(3)],i*4);
+  outputs.kps_8.data.set([0,0,1,0,.5,.5,0,1,1,1],i*10);
+  const faces=decodeYuNet(outputs,64);
+  assert.equal(faces.length,1);assert.ok(Math.abs(faces[0].score-.9)<1e-6);
+  assert.ok(Math.abs(faces[0].x-12)<1e-6);assert.ok(Math.abs(faces[0].y)<1e-6);
+  assert.deepEqual(faces[0].landmarks,[[16,8],[24,8],[20,12],[16,16],[24,16]]);
+});
+test("quality filter rejects small, blurred or low-confidence faces", () => {
+  const box={width:100,height:100,score:.9,landmarks:ALIGN_POINTS};
+  assert.equal(faceQualityReason({...box,width:20}),"人脸太小");
+  assert.equal(faceQualityReason({...box,score:.4}),"低置信度");
+  assert.equal(faceQualityReason(box,new Uint8ClampedArray(112*112*4)),"人脸模糊");
+  const pixels=new Uint8ClampedArray(112*112*4);
+  for(let i=0;i<112*112;i++){const value=(i+Math.floor(i/112))%2?255:0;pixels.set([value,value,value,255],i*4);}
+  assert.equal(faceQualityReason(box,pixels),"");
+});
+test("average grouping blocks chain merges through a single similar vector", () => {
+  const vector=degrees=>[Math.cos(degrees*Math.PI/180),Math.sin(degrees*Math.PI/180)];
+  const groups=[];
+  for(const [i,angle] of[0,50,100].entries())groupDetectedFaces(groups,[{descriptor:vector(angle)}],String(i));
+  assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
+});
+
+test("legacy indices are counted without downloading their incompatible vectors", async t => {
+  const file={docid:"gns://root/"+"B".repeat(32),rev:"C".repeat(32),name:"photo.jpg"};let requests=0;
+  t.mock.method(globalThis,"fetch",async url=>{
+    requests++;assert.ok(url.includes("listdir"));
+    return Response.json({files:[{name:`__run_faces_v2_${"B".repeat(32)}_${file.rev}_${"D".repeat(32)}.json`}],dirs:[]});
+  });
+  const data=await loadFaceIndices({link:"share",password:"test"},"gns://root",[file]);
+  assert.equal(data.indices.size,0);assert.equal(data.legacyCount,1);assert.equal(requests,1);
+});
+test("deferred indexing uploads the original once and never starts inference", async t => {
+  let transfers=0;
+  t.mock.method(globalThis,"fetch",async url=>url.includes("osbeginupload")?Response.json({docid:"gns://root/photo",rev:"r",authrequest:["POST","https://driveoss.westlake.edu.cn/file"]}):Response.json({}));
+  const result=await uploadPhotoWithIndex({link:"share",password:"test"},"gns://root","gns://root",new File(["photo"],"test.jpg"),"test.jpg",{
+    buildIndex:false,transfer:async()=>{transfers++;},analyze:async()=>{assert.fail("inference must be skipped");},
+  });
+  assert.equal(transfers,1);assert.equal(result.deferred,true);assert.equal(result.indexed,false);assert.equal(result.stored.docid,"gns://root/photo");
+});
 
 test("overlapping original tiles cover all edges and cap processing work", () => {
   for (const [width, height] of [[6048,4024],[1000,800],[40000,20000]]) {
@@ -23,10 +83,10 @@ test("deduplication removes overlapping tile detections but keeps adjacent faces
 });
 test("different detections in the same photo never collapse into one group", () => {
   const groups = [];
-  const faces = [{descriptor:[.1,.2],avatar:"a"},{descriptor:[.11,.2],avatar:"b"}];
+  const faces = [{descriptor:[1,0],avatar:"a"},{descriptor:[0,1],avatar:"b"}];
   groupDetectedFaces(groups,faces,"photo-one");
   assert.equal(groups.length,2);
-  groupDetectedFaces(groups,[{descriptor:[.105,.2],avatar:"c"}],"photo-two");
+  groupDetectedFaces(groups,[{descriptor:[1,.05],avatar:"c"}],"photo-two");
   assert.equal(groups.length,2); assert.equal(groups[0].photos.length,2);
 });
 test("stop is honored before loading or decoding any original or models", async () => {
@@ -35,16 +95,19 @@ test("stop is honored before loading or decoding any original or models", async 
 });
 test("index validation binds cached vectors to the exact photo revision", () => {
   const file={docid:"gns://root/photo",rev:"one"};
-  const face={descriptor:Array(128).fill(.1),box:[0,0,100,100],avatar:"data:image/jpeg;base64,AA=="};
-  const record={version:2,...file,faces:[face]};
+  const face={descriptor:Array(128).fill(1/Math.sqrt(128)),box:[0,0,100,100],avatar:"data:image/jpeg;base64,AA=="};
+  const record={version:3,engine:FACE_ENGINE,...file,faces:[face]};
   assert.equal(validateFaceIndex(record,file).length,1);
   assert.throws(()=>validateFaceIndex(record,{...file,rev:"two"}));
   assert.throws(()=>validateFaceIndex({...record,faces:[{...face,descriptor:[1,2]}]},file));
+  assert.throws(()=>validateFaceIndex({...record,version:2},file));
+  assert.throws(()=>validateFaceIndex({...record,engine:"another-model"},file));
+  assert.throws(()=>validateFaceIndex({...record,faces:[{...face,descriptor:Array(128).fill(.1)}]},file));
 });
 test("reference matching uses saved synthetic vectors and returns all matching photo ids", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"},{docid:"three",rev:"r"}];
-  const indices=new Map([[faceIndexKey(photos[0]),[{descriptor:[0,0]},{descriptor:[2,2]}]],[faceIndexKey(photos[1]),[{descriptor:[.1,.1]}]]]);
-  assert.deepEqual(referencePhotoIds([{descriptor:[.05,.05]}],indices,photos),["one","two"]);
+  const indices=new Map([[faceIndexKey(photos[0]),[{descriptor:[0,1]},{descriptor:[1,0]}]],[faceIndexKey(photos[1]),[{descriptor:normalizeDescriptor([1,.1])}]],[faceIndexKey(photos[2]),[{descriptor:[0,1]}]]]);
+  assert.deepEqual(referencePhotoIds([{descriptor:[1,0]}],indices,photos),["one","two"]);
 });
 test("original analysis downloads signed original bytes with cancellation and no thumbnail request", async t => {
   const urls=[];const signal=new AbortController().signal;
