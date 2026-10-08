@@ -5,7 +5,7 @@ export const REFERENCE_THRESHOLD = 0.4;
 export const GROUP_PAIR_FLOOR = 0.25;
 export const MATCHING_PRESETS = {
   standard: { group: GROUP_THRESHOLD, reference: REFERENCE_THRESHOLD, pairFloor: GROUP_PAIR_FLOOR },
-  relaxed: { group: 0.38, reference: 0.36, pairFloor: 0.2 },
+  relaxed: { group: 0.3, reference: 0.28, pairFloor: 0.1 },
   strict: { group: 0.6, reference: 0.6, pairFloor: 0.3 },
 };
 export const ALIGN_POINTS = [[38.2946,51.6963],[73.5318,51.5014],[56.0252,71.7366],[41.5493,92.3655],[70.7299,92.2041]];

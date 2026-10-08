@@ -62,7 +62,7 @@ test("standard matching joins moderately similar saved vectors that the previous
 });
 test("relaxed matching recovers borderline vectors while strict matching keeps them separate", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  const faces=[{descriptor:[1,0]},{descriptor:[.39,Math.sqrt(1-.39**2)]}];
+  const faces=[{descriptor:[1,0]},{descriptor:[.32,Math.sqrt(1-.32**2)]}];
   const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
   for(const [name,preset] of Object.entries(MATCHING_PRESETS)){
     const groups=[];
@@ -70,6 +70,16 @@ test("relaxed matching recovers borderline vectors while strict matching keeps t
     assert.equal(groups.length,name==="relaxed"?1:2);
     assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,preset.reference),name==="relaxed"?["one","two"]:["one"]);
   }
+  const previous=[];
+  photos.forEach((photo,i)=>groupDetectedFaces(previous,[faces[i]],photo.docid,.38,.2));
+  assert.equal(previous.length,2);
+  assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,.36),["one"]);
+});
+test("wider matching still rejects an endpoint below the group similarity floor", () => {
+  const preset=MATCHING_PRESETS.relaxed,groups=[];
+  const faces=[[1,0],[.5,Math.sqrt(.75)],[.09,Math.sqrt(1-.09**2)]];
+  faces.forEach((descriptor,i)=>groupDetectedFaces(groups,[{descriptor}],String(i),preset.group,preset.pairFloor));
+  assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
 });
 test("relaxed grouping still blocks long chains through unlike endpoints", () => {
   const groups=[],preset=MATCHING_PRESETS.relaxed;
@@ -113,12 +123,14 @@ test("deduplication removes overlapping tile detections but keeps adjacent faces
   assert.deepEqual(boundedFaceCrop({x:0,y:0,width:100,height:80},110,90), {x:0,y:0,width:110,height:90});
 });
 test("different detections in the same photo never collapse into one group", () => {
-  const groups = [];
   const faces = [{descriptor:[1,0],avatar:"a"},{descriptor:[1,.01],avatar:"b"}];
-  groupDetectedFaces(groups,faces,"photo-one");
-  assert.equal(groups.length,2);
-  groupDetectedFaces(groups,[{descriptor:[1,0],avatar:"c"}],"photo-two");
-  assert.equal(groups.length,2); assert.equal(groups[0].photos.length,2);
+  for(const preset of Object.values(MATCHING_PRESETS)){
+    const groups=[];
+    groupDetectedFaces(groups,faces,"photo-one",preset.group,preset.pairFloor);
+    assert.equal(groups.length,2);
+    groupDetectedFaces(groups,[{descriptor:[1,0],avatar:"c"}],"photo-two",preset.group,preset.pairFloor);
+    assert.equal(groups.length,2); assert.equal(groups[0].photos.length,2);
+  }
 });
 test("stop is honored before loading or decoding any original or models", async () => {
   const signal = AbortSignal.abort();
