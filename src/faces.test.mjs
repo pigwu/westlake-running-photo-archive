@@ -49,15 +49,15 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
 });
 
-test("grouping and reference lookup both use the single inclusive 0.15 threshold", () => {
+test("grouping and reference lookup both use the single inclusive 0.23 threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  for(const similarity of[.14,.15,.16,.2]){
+  for(const similarity of[.15,.2,.22,.23,.24]){
     const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
     const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
     const groups=[];
     photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid));
-    assert.equal(groups.length,similarity>=.15?1:2,`grouping at ${similarity}`);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.15?["one","two"]:["one"],`reference lookup at ${similarity}`);
+    assert.equal(groups.length,similarity>=.23?1:2,`grouping at ${similarity}`);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.23?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
 });
 test("single matching retains the previous relaxed floor to limit chain merges", () => {
