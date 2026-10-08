@@ -7,12 +7,15 @@ import { loadReviews, saveReview } from "./people-review.js";
 import PeoplePanel from "./PeoplePanel.jsx";
 import PeopleWorker from "./people-worker.js?worker&inline";
 import { photoLabel } from "./upload.js";
-import { FACE_MATCH_THRESHOLD, MIN_MATCH_THRESHOLD, MAX_MATCH_THRESHOLD, normalizeMatchThreshold } from "./sface-utils.js";
+import { FACE_MATCH_THRESHOLD, MIN_MATCH_THRESHOLD, MAX_MATCH_THRESHOLD, normalizeMatchThreshold, restoreMatchThreshold } from "./sface-utils.js";
 
-const MATCH_PREFERENCE = "run-face-match-threshold-v1";
+const MATCH_PREFERENCE = "run-face-match-threshold-v2";
 const EMPTY_PEOPLE = { groups: [], pending: [], ignored: [], unrecognized: [], conflicts: [] };
 function savedThreshold() {
-  try { return normalizeMatchThreshold(localStorage.getItem(MATCH_PREFERENCE)); }
+  try {
+    const value = restoreMatchThreshold(localStorage.getItem(MATCH_PREFERENCE), localStorage.getItem("run-face-match-threshold-v1"));
+    localStorage.setItem(MATCH_PREFERENCE, String(value)); return value;
+  }
   catch { return FACE_MATCH_THRESHOLD; }
 }
 

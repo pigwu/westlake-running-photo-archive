@@ -7,7 +7,7 @@ import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, load
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
-import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold } from "./sface-utils.js";
+import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold, restoreMatchThreshold } from "./sface-utils.js";
 
 // Feed the complete synthetic set through the production global grouper.
 function groupDetectedFaces(groups, faces, photoId, threshold) {
@@ -83,15 +83,15 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.ok(!groups.some(g=>g.photos.includes("0")&&g.photos.includes("2")));
 });
 
-test("grouping and reference lookup both default to the inclusive 0.23 threshold", () => {
+test("grouping and reference lookup both default to the inclusive 0.30 threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  for(const similarity of[.15,.2,.22,.23,.24]){
+  for(const similarity of[.15,.23,.29,.30,.31]){
     const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
     const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
     const groups=[];
     photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid));
-    assert.equal(groups.length,similarity>=.23?1:2,`grouping at ${similarity}`);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.23?["one","two"]:["one"],`reference lookup at ${similarity}`);
+    assert.equal(groups.length,similarity>=.30?1:2,`grouping at ${similarity}`);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.30?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
 });
 test("slider thresholds update grouping and reference matches using the same cached features", () => {
@@ -109,8 +109,8 @@ test("slider thresholds update grouping and reference matches using the same cac
   groupDetectedFaces(groups,[{descriptor:[1,0]},{descriptor:[1,0]}],"same-photo",.1);
   assert.equal(groups.length,2);
 });
-test("invalid saved or supplied slider values fall back to 0.23", () => {
-  for(const value of[null,undefined,"",NaN,Infinity,"invalid",-.1,0,.09,.81,{},true]) assert.equal(normalizeMatchThreshold(value),.23);
+test("invalid saved or supplied slider values fall back to 0.30", () => {
+  for(const value of[null,undefined,"",NaN,Infinity,"invalid",-.1,0,.09,.81,{},true]) assert.equal(normalizeMatchThreshold(value),.30);
   for(const value of[.1,.23,.8,"0.15"]) assert.equal(normalizeMatchThreshold(value),Number(value));
 });
 test("single matching retains the previous relaxed floor to limit chain merges", () => {
@@ -230,4 +230,13 @@ test("index failure after upload still reports saved original and never retransm
   });
   assert.equal(transfers,1);assert.equal(stored,true);assert.equal(result.indexed,false);
   assert.equal(result.stored.docid,"gns://root/photo");assert.match(result.indexError,/test model failure/);
+});
+
+test("new default migrates the old default once while preserving custom and subsequent choices", () => {
+ assert.equal(restoreMatchThreshold(null,null),.30);
+ assert.equal(restoreMatchThreshold(null,"0.23"),.30);
+ assert.equal(restoreMatchThreshold(null,"0.15"),.15);
+ assert.equal(restoreMatchThreshold(null,"0.8"),.8);
+ assert.equal(restoreMatchThreshold("0.23","0.23"),.23);
+ assert.equal(restoreMatchThreshold("0.4","0.23"),.4);
 });

@@ -1,11 +1,15 @@
 export const FACE_ENGINE = "yunet-2026may-sface-2021dec-align-v1";
 export const FEATURE_SIZE = 128;
-export const FACE_MATCH_THRESHOLD = 0.23;
+export const FACE_MATCH_THRESHOLD = 0.30;
 export const MIN_MATCH_THRESHOLD = 0.10;
 export const MAX_MATCH_THRESHOLD = 0.80;
 export function normalizeMatchThreshold(value) {
   const number = typeof value === "number" || (typeof value === "string" && value.trim()) ? Number(value) : NaN;
   return Number.isFinite(number) && number >= MIN_MATCH_THRESHOLD && number <= MAX_MATCH_THRESHOLD ? number : FACE_MATCH_THRESHOLD;
+}
+export function restoreMatchThreshold(current, legacy) {
+  if (current !== null && current !== undefined) return normalizeMatchThreshold(current);
+  return Number(legacy) === 0.23 ? FACE_MATCH_THRESHOLD : normalizeMatchThreshold(legacy);
 }
 export const GROUP_PAIR_FLOOR = 0.1;
 export const ALIGN_POINTS = [[38.2946,51.6963],[73.5318,51.5014],[56.0252,71.7366],[41.5493,92.3655],[70.7299,92.2041]];
