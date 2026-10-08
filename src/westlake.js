@@ -32,8 +32,8 @@ export async function shareRequest(link, password, method, fields = {}, signal) 
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    const messages = { 401002: "分享密码不正确", 401030: "分享访问次数已用完" };
-    throw new Error(messages[error.errcode] || `网盘无法读取（${response.status}），请检查分享期限和预览权限`);
+    const messages = { 401002: "分享密码不正确", 401030: "分享访问次数已用完", 403002: "此目录没有上传权限", 403039: "同名照片已存在，请改名后上传；原文件未覆盖", 403040: "同名文件已存在，且无权操作；请改名后上传", 403041: "同名目录已存在，请改名后上传", 403001: "网盘空间不足，无法上传", 404008: "分享不存在或已到期" };
+    throw new Error(messages[error.errcode] || (method.includes("upload") ? `网盘上传失败（${response.status}），请检查分享期限、上传权限或同名文件` : `网盘无法读取（${response.status}），请检查分享期限和预览权限`));
   }
   if (method === "thumbnail") {
     // The service labels JPEG bytes as JSON; use bytes, never response.json().

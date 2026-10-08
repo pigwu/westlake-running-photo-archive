@@ -10,7 +10,7 @@
     "preview:pages": "vite preview --mode pages --host 127.0.0.1 --port 4173",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "node --test server/archive.test.mjs",
-    "test:pages": "node --test src/westlake.test.mjs"
+    "test:pages": "node --test src/westlake.test.mjs src/upload.test.mjs"
   },
   "dependencies": {
     "express": "^5.1.0",

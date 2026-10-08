@@ -1,10 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, LockKeyhole, ScanFace, X, Download } from "lucide-react";
+import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, LockKeyhole, ScanFace, X, Download, Upload } from "lucide-react";
 import { isExpired, parseShare, shareRequest, originalDownload } from "./westlake";
+import { photoLabel } from "./upload";
+import Uploader from "./Uploader";
 import "./shared.css";
 
 function Thumb({ file, session, onReady, hidden }) {
+  const label = photoLabel(file.name);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -35,10 +38,11 @@ function Thumb({ file, session, onReady, hidden }) {
       }).catch(e => { if (!abort.signal.aborted) setError(e.message); });
     return () => { abort.abort(); if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [file.docid, file.rev, session]);
-  return <div className="photo" hidden={hidden}><div className="photo-image">{url ? <img src={url} alt={file.name} /> : <span>{error || "正在读取照片…"}</span>}</div><p title={file.name}>{file.name}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
+  return <div className="photo" hidden={hidden}><div className="photo-image">{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date} · {label.activity}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
 }
 
 function SharedArchive() {
+  const [view, setView] = useState(location.hash === "#/upload" ? "upload" : "gallery");
   const [albums, setAlbums] = useState([]);
   const [configError, setConfigError] = useState("");
   const [query, setQuery] = useState("");
@@ -57,6 +61,11 @@ function SharedArchive() {
   const [analyzing, setAnalyzing] = useState(false);
   const urls = useRef(new Map());
   const generation = useRef(0);
+  useEffect(() => {
+    const route = () => { closeAlbum(); setView(location.hash === "#/upload" ? "upload" : "gallery"); };
+    window.addEventListener("hashchange", route);
+    return () => window.removeEventListener("hashchange", route);
+  }, []);
   useEffect(() => {
     fetch(`${import.meta.env.BASE_URL}albums.json`, { cache: "no-store" })
       .then(r => { if (!r.ok) throw new Error("相册配置读取失败"); return r.json(); })
@@ -122,12 +131,14 @@ function SharedArchive() {
   const ready = photos.length > 0 && photos.every(p => urls.current.has(p.docid));
   const [, setReadyCount] = useState(0);
   return <div className="shared-layout">
-    <aside><a className="brand" href={import.meta.env.BASE_URL}><Camera size={26} /><span>拾光<small>跑团照片档案</small></span></a><div className="nav-active"><FolderOpen size={18} />共享相册</div><div className="sidebar-note"><span className="status-dot" />原图存于学校网盘<p>把每一次出发，<br />留在共同的记忆里。</p></div></aside>
+    <aside><a className="brand" href={import.meta.env.BASE_URL}><Camera size={26} /><span>拾光<small>跑团照片档案</small></span></a><nav className="shared-nav"><a className={view === "gallery" ? "nav-active" : "nav-link"} href="#/"><FolderOpen size={18} />共享相册</a><a className={view === "upload" ? "nav-active" : "nav-link"} href="#/upload"><Upload size={18} />上传照片</a></nav><div className="sidebar-note"><span className="status-dot" />原图存于学校网盘<p>把每一次出发，<br />留在共同的记忆里。</p></div></aside>
     <main><header><span>WESTLAKE RUNNING CLUB</span><span className="pill">学校网盘 · 在线读取</span></header>
-      {!album ? <>
+      {configError && <p role="alert" className="error">{configError}</p>}
+      {view === "upload" ? <Uploader albums={albums} onOpen={(a, s, data, path) => {
+        clearView(); history.replaceState(null, "", "#/"); setView("gallery"); setAlbum(a); setSession(s); setListing(data); setTrail(path);
+      }} /> : !album ? <>
         <div className="intro"><div><span className="eyebrow">OUR SHARED MEMORIES</span><h1>一起跑过的时光<span>。</span></h1><p>按活动与日期寻找照片，打开相册，重温每一次出发。</p></div><div className="album-total"><strong>{albums.length.toString().padStart(2, "0")}</strong><span>共享相册</span></div></div>
         <div className="filters"><label className="search"><Search size={18} /><input aria-label="搜索相册" placeholder="搜索活动、相册…" value={query} onChange={e => setQuery(e.target.value)} /></label><select aria-label="活动筛选" value={activity} onChange={e => setActivity(e.target.value)}><option value="">全部活动</option>{[...new Set(albums.map(a => a.activity))].map(a => <option key={a}>{a}</option>)}</select><input aria-label="月份筛选" type="month" value={month} onChange={e => setMonth(e.target.value)} /><button className="subtle" onClick={() => { setQuery(""); setActivity(""); setMonth(""); }}>重置</button></div>
-        {configError && <p role="alert" className="error">{configError}</p>}
         <div className="album-grid">{filtered.map((a, i) => <article key={a.id} className="album-card"><div className="album-art"><span className="art-ring" /><Camera size={54} strokeWidth={1} /><span className="art-number">{String(i + 1).padStart(2, "0")}</span><span className="art-label">RUN / REMEMBER / REPEAT</span></div><div className="album-content"><span className="activity">{a.activity}</span><h2>{a.title}</h2><p>{a.description}</p><div className="meta"><CalendarDays size={15} />{a.date || "拍摄日期待标记"}</div><div className="card-bottom"><small>{isExpired(a) ? "分享已到期" : a.expiresAt ? `有效至 ${new Date(a.expiresAt).toLocaleDateString("zh-CN", { timeZone: "Asia/Shanghai" })}` : "以网盘分享设置为准"}</small><button disabled={isExpired(a)} onClick={() => { clearView(); setReadyCount(0); setAlbum(a); }}>浏览相册 <ArrowUpRight size={17} /></button></div></div></article>)}</div>
         {!configError && filtered.length === 0 && <div className="empty">没有符合条件的相册。</div>}
       </> : <>
