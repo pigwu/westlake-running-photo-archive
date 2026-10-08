@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { uploadName, photoLabel, uploadTransport, uploadPhoto } from "./upload.js";
+import { uploadName, photoLabel, uploadTransport, uploadPhoto, todayShanghai } from "./upload.js";
 
 const file = new File([new Uint8Array([1, 2, 3])], "合影.jpg", { type: "image/jpeg", lastModified: 1700000000000 });
 test("activity and date travel with photo name for all viewers", () => {
@@ -8,8 +8,20 @@ test("activity and date travel with photo name for all viewers", () => {
   assert.deepEqual(photoLabel(name), { date: "2026-10-08", activity: "秋日晨跑", originalName: "合影.jpg" });
   assert.deepEqual(photoLabel("old.jpg"), { date: "", activity: "", originalName: "old.jpg" });
   for (const date of ["2026-02-30", "invalid"]) assert.throws(() => uploadName(file, date, "晨跑"));
-  for (const activity of ["", "../目录", "a_b"]) assert.throws(() => uploadName(file, "2026-10-08", activity));
+  for (const activity of ["../目录", "a_b"]) assert.throws(() => uploadName(file, "2026-10-08", activity));
   assert.throws(() => uploadName(new File(["script"], "script.html"), "2026-10-08", "晨跑"));
+});
+test("blank activity keeps only the date, including whitespace-only input", () => {
+  for (const activity of ["", "   "]) {
+    const name = uploadName(file, "2026-10-08", activity);
+    assert.equal(name, "2026-10-08__合影.jpg");
+    assert.deepEqual(photoLabel(name), { date: "2026-10-08", activity: "", originalName: "合影.jpg" });
+  }
+});
+test("default day follows Shanghai timezone at the UTC date boundary", () => {
+  assert.equal(todayShanghai(new Date("2026-10-07T16:00:00Z")), "2026-10-08");
+  assert.equal(todayShanghai(new Date("2026-10-08T15:59:59Z")), "2026-10-08");
+  assert.equal(todayShanghai(new Date("2026-10-08T16:00:00Z")), "2026-10-09");
 });
 test("signed POST upload fields match school transport and contain original file", async () => {
   const request = uploadTransport(["POST", "https://driveoss.westlake.edu.cn:10002/upload", "key: photos/name.jpg", "policy: a: b", "Date: ignored"], file);

@@ -38,7 +38,7 @@ function Thumb({ file, session, onReady, hidden }) {
       }).catch(e => { if (!abort.signal.aborted) setError(e.message); });
     return () => { abort.abort(); if (objectURL) URL.revokeObjectURL(objectURL); };
   }, [file.docid, file.rev, session]);
-  return <div className="photo" hidden={hidden}><div className="photo-image">{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date} · {label.activity}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
+  return <div className="photo" hidden={hidden}><div className="photo-image">{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date}{label.activity && ` · ${label.activity}`}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
 }
 
 function SharedArchive() {

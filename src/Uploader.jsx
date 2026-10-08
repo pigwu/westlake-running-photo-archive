@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Upload, FolderOpen, ArrowLeft, CheckCircle2, X, LockKeyhole } from "lucide-react";
 import { parseShare, isExpired, shareRequest } from "./westlake";
-import { uploadName, validatePhoto, uploadPhoto } from "./upload";
+import { uploadName, validatePhoto, uploadPhoto, todayShanghai } from "./upload";
 
 export default function Uploader({ albums, onOpen }) {
   const [id, setId] = useState("");
@@ -12,7 +12,7 @@ export default function Uploader({ albums, onOpen }) {
   const [listing, setListing] = useState({ dirs: [], files: [] });
   const [connecting, setConnecting] = useState(false);
   const [error, setError] = useState("");
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(todayShanghai);
   const [activity, setActivity] = useState("");
   const [queue, setQueue] = useState([]);
   const [running, setRunning] = useState(false);
@@ -89,11 +89,11 @@ export default function Uploader({ albums, onOpen }) {
     operation.current?.abort(); setSession(null); setPassword(""); setQueue([]); setTrail([]); setError(""); setResult("");
   }
   return <section className="uploader">
-    <div className="intro"><div><span className="eyebrow">CONTRIBUTE YOUR MEMORIES</span><h1>把你的照片，留在这里<span>。</span></h1><p>选择相册，填写活动和日期，原图直接上传到学校网盘。</p></div><Upload size={40} strokeWidth={1} /></div>
+    <div className="intro"><div><span className="eyebrow">CONTRIBUTE YOUR MEMORIES</span><h1>把你的照片，留在这里<span>。</span></h1><p>选择相册上传原图，日期默认当天，活动名称可选。</p></div><Upload size={40} strokeWidth={1} /></div>
     {!session ? <form className="upload-connect" onSubmit={connect}><div className="upload-section-title"><LockKeyhole size={21} /><h2>连接上传相册</h2></div><div className="upload-fields"><label>目标相册<select value={album?.id || ""} disabled={connecting} onChange={e => { setId(e.target.value); setError(""); }}>{albums.map(a => <option key={a.id} value={a.id} disabled={isExpired(a)}>{a.title}{isExpired(a) ? "（已到期）" : ""}</option>)}</select></label><label>网盘分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="输入目标相册的分享密码" disabled={connecting} /></label></div><p className="upload-help">分享需开启上传权限。密码仅保留在当前页面。</p><button disabled={!album || isExpired(album) || connecting}>{connecting ? "连接中…" : "进入上传页面"}</button></form> : <>
       <div className="upload-destination"><FolderOpen size={22} /><div><small>照片将保存到</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />更换相册 / 锁定</button></div>
       {listing.dirs.length > 0 && <div className="folders">{listing.dirs.map(d => <button key={d.docid} disabled={running || connecting} onClick={() => navigate([...trail, d])}><FolderOpen size={18} />{d.name}</button>)}</div>}
-      <div className="upload-fields"><label>活动名称<input value={activity} disabled={running} onChange={e => setActivity(e.target.value)} placeholder="例如：秋日晨跑" maxLength={40} /></label><label>拍摄日期<input type="date" value={date} disabled={running} onChange={e => setDate(e.target.value)} /></label></div>
+      <div className="upload-fields"><label>活动名称（选填）<input value={activity} disabled={running} onChange={e => setActivity(e.target.value)} placeholder="不填则不标记活动" maxLength={40} /></label><label>拍摄日期<input type="date" value={date} disabled={running} onChange={e => setDate(e.target.value)} /></label></div>
       <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。原始图片内容保持不变。上传时请保持本页打开。</p>
       <input ref={fileInput} className="file-picker" type="file" aria-label="选择要上传的照片" accept=".jpg,.jpeg,.png,.webp,.gif" multiple disabled={running} onChange={e => { choose(e.target.files); e.target.value = ""; }} />
       <button className="upload-dropzone" disabled={running} onClick={() => fileInput.current.click()}><Upload size={32} /><strong>点击选择照片</strong><span>支持多选 · JPG / PNG / WebP / GIF · 每张最多 50 MB</span></button>

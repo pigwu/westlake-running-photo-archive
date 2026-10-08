@@ -1,6 +1,11 @@
 import { shareRequest } from "./westlake.js";
 
 export const MAX_PHOTO_BYTES = 50 * 1024 * 1024;
+export function todayShanghai(now = new Date()) {
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Shanghai", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(now);
+  const value = type => parts.find(p => p.type === type).value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
+}
 export function validatePhoto(file) {
   if (!/\.(jpe?g|png|webp|gif)$/i.test(file.name)) throw new Error("仅支持 JPG、PNG、WebP、GIF 照片");
   if (file.size <= 0 || file.size > MAX_PHOTO_BYTES) throw new Error("单张照片应大于 0 字节且不超过 50 MB");
@@ -10,14 +15,14 @@ export function uploadName(file, date, activity) {
   const parsed = new Date(`${date}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !Number.isFinite(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw new Error("请填写有效的拍摄日期");
   const label = activity.trim();
-  if (!label || /[\\/:*?"<>|_]/.test(label) || label.length > 40) throw new Error("活动名称需为 1–40 字，不能含下划线或路径符号");
-  const name = `${date}_${label}__${file.name}`;
+  if (/[\\/:*?"<>|_]/.test(label) || label.length > 40) throw new Error("活动名称最多 40 字，不能含下划线或路径符号");
+  const name = label ? `${date}_${label}__${file.name}` : `${date}__${file.name}`;
   if (/[\\/:*?"<>|]/.test(name) || name.length > 255) throw new Error("照片文件名过长或含网盘不支持的符号，请改名后选择");
   return name;
 }
 export function photoLabel(name) {
-  const match = name.match(/^(\d{4}-\d{2}-\d{2})_([^_]+)__(.+)$/);
-  return match ? { date: match[1], activity: match[2], originalName: match[3] } : { date: "", activity: "", originalName: name };
+  const match = name.match(/^(\d{4}-\d{2}-\d{2})(?:_([^_]+))?__(.+)$/);
+  return match ? { date: match[1], activity: match[2] || "", originalName: match[3] } : { date: "", activity: "", originalName: name };
 }
 export function uploadTransport(authrequest, file) {
   if (!Array.isArray(authrequest) || !["POST", "PUT"].includes(authrequest[0])) throw new Error("网盘未返回可用的上传请求");
