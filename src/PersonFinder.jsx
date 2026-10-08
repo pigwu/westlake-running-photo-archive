@@ -3,6 +3,13 @@ import { ScanFace, X, Upload } from "lucide-react";
 import { originalPhotoBlob } from "./westlake.js";
 import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds } from "./face-cache.js";
 import { groupDetectedFaces } from "./face-utils.js";
+import { FACE_MATCH_THRESHOLD, MIN_MATCH_THRESHOLD, MAX_MATCH_THRESHOLD, normalizeMatchThreshold } from "./sface-utils.js";
+
+const MATCH_PREFERENCE = "run-face-match-threshold-v1";
+function savedThreshold() {
+  try { return normalizeMatchThreshold(localStorage.getItem(MATCH_PREFERENCE)); }
+  catch { return FACE_MATCH_THRESHOLD; }
+}
 
 export default function PersonFinder({ session, album, photos, onFilter }) {
   const [opened, setOpened] = useState(false);
@@ -14,6 +21,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   const [active, setActive] = useState("");
   const [references, setReferences] = useState([]);
   const [legacyCount, setLegacyCount] = useState(0);
+  const [threshold, setThreshold] = useState(savedThreshold);
   const operation = useRef(null), referenceInput = useRef(null);
   const legacyKeys = useRef([]);
   const signature = photos.map(faceIndexKey).join("\n");
@@ -23,9 +31,23 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   }, [signature]);
   const groups = useMemo(() => {
     const found = [];
-    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid);
+    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid, threshold);
     return found;
-  }, [indices, signature]);
+  }, [indices, signature, threshold]);
+  useEffect(() => {
+    if (!active.startsWith("reference-")) return;
+    const face = references[Number(active.slice("reference-".length))];
+    if (!face) return;
+    const matches = referencePhotoIds([face], indices, photos, threshold);
+    onFilter(matches);
+    setStatus(`找到 ${matches.length} 张相似照片。结果可能有遗漏或误匹配，请人工确认。`);
+  }, [threshold, indices, signature, active, references]);
+  function changeThreshold(value) {
+    const next = normalizeMatchThreshold(value);
+    setThreshold(next);
+    try { localStorage.setItem(MATCH_PREFERENCE, String(next)); } catch { /* Browsing still works without storage. */ }
+    if (!active.startsWith("reference-")) { setActive(""); onFilter(null); }
+  }
   const indexed = photos.filter(p => indices.has(faceIndexKey(p))).length;
   const rootDocid = album.rootDocid || photos[0]?.docid.split("/").slice(0, 3).join("/");
   async function readIndex() {
@@ -93,14 +115,13 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     finally { URL.revokeObjectURL(url); if (operation.current === abort) setBusy(false); }
   }
   function selectReference(face, index) {
-    const matches = referencePhotoIds([face], indices, photos);
-    onFilter(matches); setActive(`reference-${index}`);
-    setStatus(`找到 ${matches.length} 张相似照片。结果可能有遗漏或误匹配，请人工确认。`);
+    setActive(`reference-${index}`);
   }
   return <section className="person-finder">
     {!opened ? <button className="subtle" disabled={!photos.length || busy} onClick={readIndex}><ScanFace size={17} />按人找照片</button> : <>
       <div className="finder-heading"><h2><ScanFace size={20} />按人找照片</h2><button className="subtle" disabled={busy} aria-label="关闭人物筛选" onClick={() => { setOpened(false); setActive(""); onFilter(null); }}><X size={18} /></button></div>
       <p className="face-status">{loaded ? `${indexed}/${photos.length} 张照片已有共享索引 · ${groups.length} 个人物组` : "正在读取索引"}。索引包含人脸小图和特征，保存在当前公开网盘分享中。分组需人工确认。</p>
+      <div className="match-slider"><div className="match-slider-heading"><label>匹配门槛 <output>{threshold.toFixed(2)}</output><input aria-label="人脸匹配门槛" type="range" min={MIN_MATCH_THRESHOLD} max={MAX_MATCH_THRESHOLD} step="0.01" value={threshold} disabled={busy} onChange={e => changeThreshold(e.target.value)} aria-valuetext={`${threshold.toFixed(2)}，数值越低越宽松`} /></label><button className="subtle" disabled={busy || threshold === FACE_MATCH_THRESHOLD} onClick={() => changeThreshold(FACE_MATCH_THRESHOLD)}>重置为 {FACE_MATCH_THRESHOLD.toFixed(2)}</button></div><div className="match-slider-scale"><span>0.10 · 更宽松</span><span>0.80 · 更严格</span></div><p className="upload-help">拖动即可更新分组，无需重建索引；已选参照人脸会自动重新比对。此设置仅影响你的浏览器，自动记住，下次打开仍生效。</p></div>
       {legacyCount > 0 && <p className="upload-help">已升级人脸识别，{legacyCount} 张照片的旧索引需要补建一次，照片无需重新上传。</p>}
       <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引</button><button disabled={busy || !loaded || indexed === photos.length || !album.canUpload} onClick={buildIndex}>补建人脸索引（{photos.length - indexed} 张）</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
       <input ref={referenceInput} className="file-picker" type="file" accept=".jpg,.jpeg,.png,.webp" aria-label="选择人脸参照照片" onChange={e => { chooseReference(e.target.files[0]); e.target.value = ""; }} />

@@ -33,7 +33,8 @@ export function boundedFaceCrop(box, width, height, padding = 0.18) {
   const x = Math.max(0, Math.min(width - 1, box.x - pad)), y = Math.max(0, Math.min(height - 1, box.y - pad));
   return { x, y, width: Math.max(1, Math.min(width, box.x + box.width + pad) - x), height: Math.max(1, Math.min(height, box.y + box.height + pad) - y) };
 }
-export function groupDetectedFaces(groups, faces, photoId) {
+export function groupDetectedFaces(groups, faces, photoId, threshold = FACE_MATCH_THRESHOLD) {
+  threshold = normalizeMatchThreshold(threshold);
   for (const face of faces) {
     const scores = groups.map(g => {
       if (g.photos.includes(photoId)) return -1;
@@ -42,10 +43,10 @@ export function groupDetectedFaces(groups, faces, photoId) {
       return Math.min(...scores) < GROUP_PAIR_FLOOR ? -1 : scores.reduce((sum,v)=>sum+v,0)/scores.length;
     });
     const closest = Math.max(...scores);
-    const group = closest >= FACE_MATCH_THRESHOLD ? groups[scores.indexOf(closest)] : null;
+    const group = closest >= threshold ? groups[scores.indexOf(closest)] : null;
     if (group) { group.photos.push(photoId); (group.descriptors ||= [group.descriptor]).push(face.descriptor); }
     else groups.push({ ...face, name: `人物 ${groups.length + 1}`, photos: [photoId], descriptors:[face.descriptor] });
   }
   return groups;
 }
-import { cosineSimilarity, FACE_MATCH_THRESHOLD, GROUP_PAIR_FLOOR } from "./sface-utils.js";
+import { cosineSimilarity, FACE_MATCH_THRESHOLD, GROUP_PAIR_FLOOR, normalizeMatchThreshold } from "./sface-utils.js";

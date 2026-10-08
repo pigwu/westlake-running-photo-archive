@@ -6,7 +6,7 @@ import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, load
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
-import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor } from "./sface-utils.js";
+import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold } from "./sface-utils.js";
 
 test("ONNX inputs retain raw pixel values in the model's expected channel order", () => {
   const rgba=new Uint8ClampedArray([10,20,30,255,40,50,60,255]);
@@ -49,7 +49,7 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
 });
 
-test("grouping and reference lookup both use the single inclusive 0.23 threshold", () => {
+test("grouping and reference lookup both default to the inclusive 0.23 threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
   for(const similarity of[.15,.2,.22,.23,.24]){
     const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
@@ -59,6 +59,25 @@ test("grouping and reference lookup both use the single inclusive 0.23 threshold
     assert.equal(groups.length,similarity>=.23?1:2,`grouping at ${similarity}`);
     assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.23?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
+});
+test("slider thresholds update grouping and reference matches using the same cached features", () => {
+  const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
+  const faces=[{descriptor:[1,0]},{descriptor:[.2,Math.sqrt(1-.2**2)]}];
+  const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
+  for (const threshold of [.1,.15,.2,.23,.8,.15]) {
+    const groups=[];
+    photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid,threshold));
+    assert.equal(groups.length,threshold<=.2?1:2);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,threshold),threshold<=.2?["one","two"]:["one"]);
+  }
+  // Even at the loosest setting two faces in a single photo remain separate.
+  const groups=[];
+  groupDetectedFaces(groups,[{descriptor:[1,0]},{descriptor:[1,0]}],"same-photo",.1);
+  assert.equal(groups.length,2);
+});
+test("invalid saved or supplied slider values fall back to 0.23", () => {
+  for(const value of[null,undefined,"",NaN,Infinity,"invalid",-.1,0,.09,.81,{},true]) assert.equal(normalizeMatchThreshold(value),.23);
+  for(const value of[.1,.23,.8,"0.15"]) assert.equal(normalizeMatchThreshold(value),Number(value));
 });
 test("single matching retains the previous relaxed floor to limit chain merges", () => {
   const groups=[];
