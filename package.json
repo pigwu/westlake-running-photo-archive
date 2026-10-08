@@ -6,7 +6,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "vite build",
     "dev:pages": "vite --mode pages",
-    "build:pages": "vite build --mode pages",
+    "build:pages": "vite build --mode pages && node scripts/check-pages-build.mjs",
     "preview:pages": "vite preview --mode pages --host 127.0.0.1 --port 4173",
     "start": "node --env-file-if-exists=.env server/index.mjs",
     "test": "node --test server/archive.test.mjs",

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { faceTiles, deduplicateFaces, boundedFaceCrop, groupDetectedFaces } from "./face-utils.js";
-import { analyzePhoto, detectOriginalFaces, describeDetectedFaces } from "./faces.js";
+import { analyzePhoto, detectOriginalFaces, describeDetectedFaces, prepareFaceAnalysis } from "./faces.js";
 import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices } from "./face-cache.js";
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
@@ -31,7 +31,7 @@ test("different detections in the same photo never collapse into one group", () 
 });
 test("stop is honored before loading or decoding any original or models", async () => {
   const signal = AbortSignal.abort();
-  for (const promise of [analyzePhoto({url:"invalid"},{signal}),detectOriginalFaces({}, {signal}),describeDetectedFaces({}, [], {signal})]) await assert.rejects(promise,{name:"AbortError"});
+  for (const promise of [prepareFaceAnalysis({signal}),analyzePhoto({url:"invalid"},{signal}),detectOriginalFaces({}, {signal}),describeDetectedFaces({}, [], {signal})]) await assert.rejects(promise,{name:"AbortError"});
 });
 test("index validation binds cached vectors to the exact photo revision", () => {
   const file={docid:"gns://root/photo",rev:"one"};

@@ -45,7 +45,10 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     const next = new Map(indices);
     let failed = 0, lastFailure = "", saved = 0;
     try {
-      const { analyzePhoto } = await import("./faces.js");
+      const { analyzePhoto, prepareFaceAnalysis } = await import("./faces.js");
+      // A shared model failure should stop the batch before any original
+      // downloads, rather than reporting the same error for all 14 photos.
+      await prepareFaceAnalysis({ signal: abort.signal, onProgress: setStatus });
       const missing = photos.filter(p => !next.has(faceIndexKey(p)));
       for (let i = 0; i < missing.length; i++) {
         if (abort.signal.aborted) break;
@@ -63,9 +66,12 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
         } catch (e) { if (abort.signal.aborted) break; failed++; lastFailure = e.message; }
         finally { if (url) URL.revokeObjectURL(url); }
       }
-      setLoaded(true); setStatus(`${abort.signal.aborted ? "已停止。" : "补建完成。"}已保存 ${saved} 张照片的人脸索引，其他跑友可直接使用。`);
+      setLoaded(true); setStatus(`${abort.signal.aborted ? "已停止。" : failed && !saved ? "补建失败。" : "补建完成。"}已保存 ${saved} 张照片的人脸索引。${saved ? "其他跑友可直接使用。" : ""}`);
       if (failed) setError(`${failed} 张索引建立失败：${lastFailure}`);
-    } catch (e) { if (!abort.signal.aborted) setError(e.message); }
+    } catch (e) {
+      if (!abort.signal.aborted) { setStatus("未开始补建，请刷新页面后重试。"); setError(`人脸模型加载失败：${e.message}`); }
+      else setStatus("已停止。");
+    }
     finally { if (operation.current === abort) setBusy(false); }
   }
   async function chooseReference(file) {

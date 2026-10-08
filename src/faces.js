@@ -21,6 +21,15 @@ async function loadRecognition(faceapi) {
   ]).catch(e => { recognitionLoaded = null; throw e; });
   await recognitionLoaded;
 }
+export async function prepareFaceAnalysis({ signal, onProgress = () => {} } = {}) {
+  checkAbort(signal);
+  onProgress("加载人脸检测模型…");
+  const faceapi = await loadDetector();
+  checkAbort(signal);
+  onProgress("加载人脸特征模型…");
+  await loadRecognition(faceapi);
+  checkAbort(signal);
+}
 function imageCrop(image, box, size) {
   const canvas = document.createElement("canvas");
   canvas.width = size; canvas.height = size;

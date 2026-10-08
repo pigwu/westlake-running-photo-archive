@@ -11,5 +11,10 @@ export default defineConfig(({ mode }) => ({
     strictPort: true,
     proxy: { "/api": "http://127.0.0.1:3001" },
   },
-  build: { chunkSizeWarningLimit: 1800, outDir: mode === "pages" ? "dist-pages" : "dist" },
+  // Pages replaces the deployed asset directory on every release. Keep the
+  // analysis code in the entry bundle so an open/cached page never has to
+  // fetch a separate face-api chunk later in the middle of indexing.
+  build: { chunkSizeWarningLimit: 1800, outDir: mode === "pages" ? "dist-pages" : "dist",
+    ...(mode === "pages" ? { rollupOptions: { output: { inlineDynamicImports: true } } } : {}),
+  },
 }));
