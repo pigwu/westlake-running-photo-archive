@@ -15,3 +15,5 @@
 .batch-download{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.batch-download>span{font-size:12px;line-height:1.7;color:#66765a}.batch-download>.error{color:#9d4b3a}.photo-assignment>.upload-help{flex-basis:100%;margin:0}
 .mobile-photo-save{flex-basis:100%;display:grid;gap:12px;padding:14px;background:#fff;border-radius:10px}.mobile-photo-save strong{overflow-wrap:anywhere}.mobile-photo-save img{display:block;width:100%;max-width:420px;max-height:60vh;object-fit:contain;-webkit-touch-callout:default}.mobile-photo-save p{margin:0;font-size:12px;line-height:1.8}
 .album-page{overflow-anchor:none}
+
+.back-to-top{position:fixed;right:24px;bottom:calc(24px + env(safe-area-inset-bottom,0px));z-index:10;flex-direction:column;gap:4px;min-width:56px;min-height:56px;padding:10px;border:1px solid #ffffff50;border-radius:14px;box-shadow:0 4px 18px #17231730}.back-to-top span{font-size:10px}.back-to-top:focus-visible{outline:3px solid #8aab61;outline-offset:3px}@media(max-width:600px){.back-to-top{right:14px;bottom:calc(16px + env(safe-area-inset-bottom,0px));min-width:52px;min-height:52px;padding:8px}}
