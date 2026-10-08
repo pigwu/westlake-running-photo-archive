@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, X, Download, Upload, Trash2, RotateCcw } from "lucide-react";
 import { isExpired, parseShare, shareRequest, originalDownload } from "./westlake";
@@ -68,12 +68,17 @@ function SharedArchive() {
   const [activity, setActivity] = useState("");
   const [month, setMonth] = useState("");
   const [album, setAlbum] = useState(null);
-  useEffect(() => {
-    if (album) window.scrollTo({ top: 0, behavior: "instant" });
-  }, [album?.id]);
   const [password, setPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
   const [session, setSession] = useState(null);
+  useLayoutEffect(() => {
+    if (!album) return;
+    const top = () => window.scrollTo({ top: 0, behavior: "instant" });
+    // Reset both when opening the album and after its async connection renders
+    // the photo grid. Prevent the previous page's footer becoming the anchor.
+    top(); const frame = requestAnimationFrame(top);
+    return () => cancelAnimationFrame(frame);
+  }, [album?.id, session?.link]);
   const [listing, setListing] = useState({ dirs: [], files: [] });
   const [trail, setTrail] = useState([]);
   const [busy, setBusy] = useState(false);
@@ -214,7 +219,7 @@ function SharedArchive() {
   const [, setReadyCount] = useState(0);
   return <div className="shared-layout">
     <aside><a className="brand" href={import.meta.env.BASE_URL}><Camera size={26} /><span>拾光<small>跑团照片档案</small></span></a><nav className="shared-nav"><a className={view === "gallery" ? "nav-active" : "nav-link"} href="#/"><FolderOpen size={18} />共享相册</a><a className={view === "upload" ? "nav-active" : "nav-link"} href="#/upload"><Upload size={18} />上传照片</a></nav><div className="sidebar-note"><span className="status-dot" />原图存于学校网盘<p>把每一次出发，<br />留在共同的记忆里。</p></div></aside>
-    <main><header><span>WESTLAKE RUNNING CLUB</span><span className="pill">学校网盘 · 在线读取</span></header>
+    <main className={album ? "album-page" : undefined}><header><span>WESTLAKE RUNNING CLUB</span><span className="pill">学校网盘 · 在线读取</span></header>
       {configError && <p role="alert" className="error">{configError}</p>}
       {editor && <AlbumEditor key={editor.album?.id || "new"} sources={sources} album={editor.album} onClose={() => setEditor(null)} onSaved={savedAlbum} />}
       {removal && <PhotoRemovalDialog source={sources.find(s => s.id === album.sourceId)} photos={removal.photos} deleted={removal.deleted} onClose={() => setRemoval(null)} onBusy={value => { mutation.current = value; setRemoving(value); }} onSaved={removedPhotos} />}

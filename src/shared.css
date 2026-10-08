@@ -14,3 +14,4 @@
 
 .batch-download{display:flex;align-items:center;gap:10px;flex-wrap:wrap}.batch-download>span{font-size:12px;line-height:1.7;color:#66765a}.batch-download>.error{color:#9d4b3a}.photo-assignment>.upload-help{flex-basis:100%;margin:0}
 .mobile-photo-save{flex-basis:100%;display:grid;gap:12px;padding:14px;background:#fff;border-radius:10px}.mobile-photo-save strong{overflow-wrap:anywhere}.mobile-photo-save img{display:block;width:100%;max-width:420px;max-height:60vh;object-fit:contain;-webkit-touch-callout:default}.mobile-photo-save p{margin:0;font-size:12px;line-height:1.8}
+.album-page{overflow-anchor:none}
