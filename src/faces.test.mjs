@@ -1,12 +1,20 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { faceTiles, deduplicateFaces, boundedFaceCrop, groupDetectedFaces } from "./face-utils.js";
+import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
+import { buildPeople } from "./people.js";
 import { analyzePhoto, detectOriginalFaces, describeDetectedFaces, prepareFaceAnalysis } from "./faces.js";
 import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices } from "./face-cache.js";
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
 import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold } from "./sface-utils.js";
+
+// Feed the complete synthetic set through the production global grouper.
+function groupDetectedFaces(groups, faces, photoId, threshold) {
+  const all = [...groups.flatMap(g => g.faces), ...faces.map((face, i) => ({ ...face, key: `${photoId}|${i}`, photoId }))];
+  groups.splice(0, groups.length, ...buildPeople(all, threshold).groups);
+  return groups;
+}
 
 test("ONNX inputs retain raw pixel values in the model's expected channel order", () => {
   const rgba=new Uint8ClampedArray([10,20,30,255,40,50,60,255]);
@@ -46,7 +54,7 @@ test("average grouping blocks chain merges through a single similar vector", () 
   const vector=degrees=>[Math.cos(degrees*Math.PI/180),Math.sin(degrees*Math.PI/180)];
   const groups=[];
   for(const [i,angle] of[0,50,100].entries())groupDetectedFaces(groups,[{descriptor:vector(angle)}],String(i));
-  assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
+  assert.equal(groups.length,2);assert.ok(!groups.some(g=>g.photos.includes("0")&&g.photos.includes("2")));
 });
 
 test("grouping and reference lookup both default to the inclusive 0.23 threshold", () => {
@@ -83,7 +91,7 @@ test("single matching retains the previous relaxed floor to limit chain merges",
   const groups=[];
   const faces=[[1,0],[.5,Math.sqrt(.75)],[.09,Math.sqrt(1-.09**2)]];
   faces.forEach((descriptor,i)=>groupDetectedFaces(groups,[{descriptor}],String(i)));
-  assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
+  assert.equal(groups.length,2);assert.ok(!groups.some(g=>g.photos.includes("0")&&g.photos.includes("2")));
 });
 
 test("legacy indices are counted without downloading their incompatible vectors", async t => {

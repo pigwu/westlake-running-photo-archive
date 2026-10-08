@@ -68,7 +68,9 @@ export async function detectOriginalFaces(image,{signal,onProgress=()=>{}}={}) {
         }
       }finally{input.dispose?.();releaseOutputs(outputs);}
     }
-    return deduplicateFaces(boxes).slice(0,200);
+    const all = deduplicateFaces(boxes), result = all.slice(0,200);
+    result.totalDetected = all.length;
+    return result;
   }finally{canvas.width=0;canvas.height=0;}
 }
 export async function analyzePhoto(photo,options={}) {
@@ -76,24 +78,31 @@ export async function analyzePhoto(photo,options={}) {
   try {const boxes=await detectOriginalFaces(image,options);return await describeDetectedFaces(image,boxes,options);}
   finally{image.src="";}
 }
-export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{}}={}) {
-  checkAbort(signal);const faces=[];if(!boxes.length)return faces;
+export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{}}={}) {
+  checkAbort(signal);const faces=[],rejected=[];
+  const report=()=>onDiagnostics({version:1,totalDetected:boxes.totalDetected||boxes.length,accepted:faces.length,rejected});
+  if(!boxes.length){report();return faces;}
   const width=image.naturalWidth||image.width,height=image.naturalHeight||image.height,ort=await runtime();let session,skipped=0;
   for(let i=0;i<boxes.length;i++) {
     onProgress(`处理人脸 ${i+1}/${boxes.length}`);await yieldUI();checkAbort(signal);
-    const box=boxes[i];if(faceQualityReason(box)){skipped++;continue;}
+    const box=boxes[i];
+    const bounded=boundedFaceCrop(box,width,height),preview=canvasOf(80);
+    preview.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,80,80);
+    const previewUrl=preview.toDataURL("image/jpeg",.65);preview.width=0;preview.height=0;
+    const reject=reason=>{skipped++;rejected.push({box:[box.x,box.y,box.width,box.height],avatar:previewUrl,reason});};
+    const reason=faceQualityReason(box);if(reason){reject(reason);continue;}
     const crop=canvasOf(112),ctx=crop.getContext("2d",{willReadFrequently:true});let input,outputs,avatar;
     try {
       ctx.setTransform(...similarityTransform(box.landmarks));ctx.drawImage(image,0,0);ctx.resetTransform();
-      const pixels=ctx.getImageData(0,0,112,112).data;if(faceQualityReason(box,pixels)){skipped++;continue;}
+      const pixels=ctx.getImageData(0,0,112,112).data,reason=faceQualityReason(box,pixels);if(reason){reject(reason);continue;}
       session ||= await loadSession("recognize",{signal,onProgress});checkAbort(signal);
       input=new ort.Tensor("float32",planarPixels(pixels,112,112,"RGB"),[1,3,112,112]);
       outputs=await session.run({[session.inputNames[0]]:input});checkAbort(signal);
       const descriptor=normalizeDescriptor(outputs[session.outputNames[0]].data);if(descriptor.length!==128)throw new Error("SFace 特征维度不兼容");
-      const bounded=boundedFaceCrop(box,width,height);avatar=canvasOf(120);
+      avatar=canvasOf(120);
       avatar.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,120,120);
       faces.push({descriptor,box:[box.x,box.y,box.width,box.height],avatar:avatar.toDataURL("image/jpeg",.75)});
     }finally{input?.dispose?.();releaseOutputs(outputs);crop.width=0;crop.height=0;if(avatar){avatar.width=0;avatar.height=0;}}
   }
-  onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，跳过 ${skipped} 张模糊、小脸或大角度侧脸`:""}`);return faces;
+  report();onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，保留 ${skipped} 张未参与识别的人脸及原因`:""}`);return faces;
 }

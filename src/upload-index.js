@@ -9,9 +9,10 @@ export async function uploadPhotoWithIndex(session, folder, rootDocid, file, nam
   try {
     url = URL.createObjectURL(file);
     const analyzePhoto = analyze || (await import("./faces.js")).analyzePhoto;
-    const faces = await analyzePhoto({ url }, { signal, onProgress: onIndexProgress });
+    let diagnostics;
+    const faces = await analyzePhoto({ url }, { signal, onProgress: onIndexProgress, onDiagnostics: data => { diagnostics = data; } });
     onIndexProgress("保存共享人脸索引…");
-    await saveFaceIndex(session, rootDocid, stored, faces, { signal, transfer: indexTransfer });
+    await saveFaceIndex(session, rootDocid, stored, faces, { signal, transfer: indexTransfer, diagnostics });
     return { stored, indexed: true, faceCount: faces.length };
   } catch (e) {
     // Original bytes have already been committed; an index failure must not
