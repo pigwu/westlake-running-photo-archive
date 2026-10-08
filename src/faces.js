@@ -1,4 +1,5 @@
 import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
+import { loadAnalysisImage } from "./image-input.js";
 
 let detectorLoaded, recognitionLoaded;
 function checkAbort(signal) { if (signal?.aborted) throw new DOMException("分析已停止", "AbortError"); }
@@ -62,8 +63,7 @@ export async function detectOriginalFaces(image, { signal, onProgress = () => {}
 }
 export async function analyzePhoto(photo, { signal, onProgress = () => {} } = {}) {
   checkAbort(signal);
-  const faceapi = await loadDetector();
-  const image = await faceapi.fetchImage(photo.url);
+  const image = await loadAnalysisImage(photo.url, signal);
   try {
     checkAbort(signal);
     const boxes = await detectOriginalFaces(image, { signal, onProgress });

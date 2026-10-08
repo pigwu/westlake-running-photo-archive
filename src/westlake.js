@@ -1,3 +1,5 @@
+import { normalizeImageBlob } from "./image-input.js";
+
 const ORIGIN = "https://pan.westlake.edu.cn";
 export function parseShare(url) {
   const parsed = new URL(url);
@@ -29,7 +31,7 @@ export async function originalPhotoBlob(session, file, signal) {
   if (!response.ok) throw new Error(`原图读取失败（${response.status}），请检查网盘下载权限或网络`);
   const blob = await response.blob();
   if (!blob.size || blob.size > 50 * 1024 * 1024) throw new Error("原图为空或超过 50 MB，无法分析");
-  return blob;
+  return normalizeImageBlob(blob);
 }
 export async function shareRequest(link, password, method, fields = {}, signal) {
   // Matches the school's own web client. text/plain avoids a CORS preflight.

@@ -5,6 +5,7 @@ import { analyzePhoto, detectOriginalFaces, describeDetectedFaces } from "./face
 import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices } from "./face-cache.js";
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
+import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
 
 test("overlapping original tiles cover all edges and cap processing work", () => {
   for (const [width, height] of [[6048,4024],[1000,800],[40000,20000]]) {
@@ -50,10 +51,26 @@ test("original analysis downloads signed original bytes with cancellation and no
   t.mock.method(globalThis,"fetch",async(url,options)=>{
     urls.push(url);assert.equal(options.signal,signal);
     if(url.includes("method=osdownload")) return Response.json({authrequest:["GET","https://driveoss.westlake.edu.cn/original"]});
-    return new Response(new Uint8Array([1,2,3]));
+    return new Response(new Uint8Array([255,216,255]), { headers: { "Content-Type": "application/octet-stream" } });
   });
   const blob=await originalPhotoBlob({link:"test",password:"secret"},{docid:"photo",name:"a.jpg",size:3},signal);
-  assert.equal(blob.size,3);assert.equal(urls.length,2);assert.ok(urls.every(url=>!url.includes("thumbnail")));
+  assert.equal(blob.size,3);assert.equal(blob.type,"image/jpeg");assert.equal(urls.length,2);assert.ok(urls.every(url=>!url.includes("thumbnail")));
+});
+
+test("image bytes override generic, missing or incorrect MIME types without changing pixels", async () => {
+  const samples = [["image/jpeg",[255,216,255,224]], ["image/png",[137,80,78,71,13,10,26,10]],
+    ["image/gif",Array.from(new TextEncoder().encode("GIF89a"))],
+    ["image/webp",Array.from(new TextEncoder().encode("RIFF1234WEBP"))]];
+  for (const [type, bytes] of samples) for (const declaredType of ["application/octet-stream", "", "application/json"]) {
+    const normalized = await normalizeImageBlob(new Blob([new Uint8Array(bytes)], {type:declaredType}));
+    assert.equal(normalized.type,type);
+    assert.deepEqual(new Uint8Array(await normalized.arrayBuffer()),new Uint8Array(bytes));
+  }
+  await assert.rejects(normalizeImageBlob(new Blob(["<html>error</html>"],{type:"image/jpeg"})), /不是支持的图片/);
+});
+
+test("image loading stops before fetching when cancelled", async () => {
+  await assert.rejects(loadAnalysisImage("invalid",AbortSignal.abort()),{name:"AbortError"});
 });
 test("shared index can be saved and read by another client without running inference", async t => {
   const root="gns://"+"A".repeat(32), file={docid:root+"/"+"B".repeat(32),rev:"C".repeat(32),name:"a.jpg"};
