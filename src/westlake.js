@@ -22,6 +22,15 @@ export async function originalDownload(link, password, file, signal) {
   }
   return url.href;
 }
+export async function originalPhotoBlob(session, file, signal) {
+  if (file.size > 50 * 1024 * 1024) throw new Error("原图超过 50 MB，暂不支持本机分析");
+  const url = await originalDownload(session.link, session.password, file, signal);
+  const response = await fetch(url, { credentials: "omit", signal: signal || AbortSignal.timeout(60000) });
+  if (!response.ok) throw new Error(`原图读取失败（${response.status}），请检查网盘下载权限或网络`);
+  const blob = await response.blob();
+  if (!blob.size || blob.size > 50 * 1024 * 1024) throw new Error("原图为空或超过 50 MB，无法分析");
+  return blob;
+}
 export async function shareRequest(link, password, method, fields = {}, signal) {
   // Matches the school's own web client. text/plain avoids a CORS preflight.
   const response = await fetch(`${ORIGIN}/api/v1/link?method=${method}`, {

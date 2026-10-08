@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Camera, FolderOpen, ArrowUpRight, ArrowLeft, Search, CalendarDays, LockKeyhole, ScanFace, X, Download, Upload } from "lucide-react";
 import { isExpired, parseShare, shareRequest, originalDownload } from "./westlake";
+import PersonFinder from "./PersonFinder";
 import { photoLabel } from "./upload";
 import Uploader from "./Uploader";
 import AlbumEditor from "./AlbumEditor";
@@ -67,10 +68,7 @@ function SharedArchive() {
   const [trail, setTrail] = useState([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const [groups, setGroups] = useState([]);
-  const [person, setPerson] = useState(null);
-  const [faceStatus, setFaceStatus] = useState("");
-  const [analyzing, setAnalyzing] = useState(false);
+  const [matchedPhotos, setMatchedPhotos] = useState(null);
   const urls = useRef(new Map());
   const generation = useRef(0);
   useEffect(() => {
@@ -120,7 +118,7 @@ function SharedArchive() {
     finally { setMoving(false); }
   }
   function clearView() {
-    generation.current++; urls.current.clear(); setGroups([]); setPerson(null); setFaceStatus(""); setAnalyzing(false);
+    generation.current++; urls.current.clear(); setMatchedPhotos(null);
   }
   function closeAlbum() {
     clearView(); setAlbum(null); setSession(null); setPassword(""); setError(""); setListing({ dirs: [], files: [] }); setTrail([]); setBusy(false); setSelectedPhotos([]); setSelecting(false); setMoveTarget("");
@@ -150,33 +148,7 @@ function SharedArchive() {
     finally { if (version === generation.current) setBusy(false); }
   }
   const photos = albumFiles(listing.files, album?.albumId, album?.assignments);
-  async function analyze() {
-    const version = generation.current;
-    setAnalyzing(true); setGroups([]); setPerson(null); setError("");
-    try {
-      const { analyzePhoto } = await import("./faces");
-      const found = []; let failed = 0;
-      for (let i = 0; i < photos.length; i++) {
-        if (version !== generation.current) return;
-        setFaceStatus(`正在分析 ${i + 1} / ${photos.length}`);
-        try {
-          const faces = await analyzePhoto({ url: urls.current.get(photos[i].docid) });
-          for (const face of faces) {
-            const distances = found.map(g => Math.sqrt(g.descriptor.reduce((sum, v, j) => sum + (v - face.descriptor[j]) ** 2, 0)));
-            const closest = Math.min(...distances);
-            const group = closest < 0.5 ? found[distances.indexOf(closest)] : null;
-            if (group) { if (!group.photos.includes(photos[i].docid)) group.photos.push(photos[i].docid); }
-            else found.push({ ...face, name: `人物 ${found.length + 1}`, photos: [photos[i].docid] });
-          }
-        } catch { failed++; }
-      }
-      if (version !== generation.current) return;
-      setGroups(found); setFaceStatus(`识别到 ${found.length} 个人物分组${failed ? `，${failed} 张分析失败` : ""}。结果仅保留在当前页面，可能需要人工确认。`);
-    } catch (e) { if (version === generation.current) setError(`人脸模型加载失败：${e.message}`); }
-    finally { if (version === generation.current) setAnalyzing(false); }
-  }
   const filtered = albums.filter(a => `${a.title} ${a.activity} ${a.description || ""}`.toLowerCase().includes(query.toLowerCase()) && (!activity || a.activity === activity) && (!month || a.date?.startsWith(month)));
-  const ready = photos.length > 0 && photos.every(p => urls.current.has(p.docid));
   const [, setReadyCount] = useState(0);
   return <div className="shared-layout">
     <aside><a className="brand" href={import.meta.env.BASE_URL}><Camera size={26} /><span>拾光<small>跑团照片档案</small></span></a><nav className="shared-nav"><a className={view === "gallery" ? "nav-active" : "nav-link"} href="#/"><FolderOpen size={18} />共享相册</a><a className={view === "upload" ? "nav-active" : "nav-link"} href="#/upload"><Upload size={18} />上传照片</a></nav><div className="sidebar-note"><span className="status-dot" />原图存于学校网盘<p>把每一次出发，<br />留在共同的记忆里。</p></div></aside>
@@ -194,11 +166,10 @@ function SharedArchive() {
       </> : <>
         <button className="back" disabled={moving} onClick={() => { closeAlbum(); refreshAlbums().catch(() => {}); }}><ArrowLeft size={17} />全部相册</button><div className="album-heading"><div><span className="eyebrow">{album.activity}</span><h1>{album.title}</h1><p>{album.date || "拍摄日期待标记"}</p></div><a className="external" href={album.url} target="_blank" rel="noopener noreferrer">在网盘中打开 <ArrowUpRight size={17} /></a></div>
         {!session ? <form className="unlock" onSubmit={unlock}><FolderOpen size={28} /><h2>{needsPassword ? "更新相册连接" : "连接学校网盘"}</h2><p>无需填写密码，自动打开共享照片。</p>{needsPassword && <label>分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} autoFocus placeholder="输入更新后的分享密码" /></label>}<button disabled={busy}>{busy ? "正在连接学校网盘…" : "打开照片"}</button></form> : <>
-          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={busy || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{photos.length} 张照片</span><button disabled={!ready || busy || analyzing} onClick={analyze}><ScanFace size={17} />{analyzing ? "分析中…" : "本机人脸分组"}</button><button className="subtle" disabled={moving} onClick={() => { setSelecting(!selecting); setSelectedPhotos([]); }}>{selecting ? "取消选择" : "选择照片分类"}</button><button className="subtle" disabled={moving} onClick={() => { clearView(); setReadyCount(0); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />断开连接</button></div>
+          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={busy || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{photos.length} 张照片</span><button className="subtle" disabled={moving} onClick={() => { setSelecting(!selecting); setSelectedPhotos([]); }}>{selecting ? "取消选择" : "选择照片分类"}</button><button className="subtle" disabled={moving} onClick={() => { clearView(); setReadyCount(0); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />断开连接</button></div>
           {selecting && <div className="photo-assignment"><span>已选 {selectedPhotos.length} 张</span><button className="subtle" disabled={moving} onClick={() => setSelectedPhotos(photos.slice(0, 100).map(p => p.docid))}>全选当前相册（最多100张）</button><select aria-label="照片分类目标相册" value={moveTarget} disabled={moving} onChange={e => setMoveTarget(e.target.value)}><option value="">选择目标相册</option>{albums.filter(a => a.sourceId === album.sourceId && a.id !== album.id).map(a => <option key={a.id} value={a.id}>{a.title}</option>)}</select><button disabled={moving || !moveTarget || !selectedPhotos.length || !album.canUpload} onClick={movePhotos}>{moving ? "保存分类中…" : "移入相册"}</button></div>}
-          {faceStatus && <p className="face-status" role="status">{faceStatus}</p>}
-          {groups.length > 0 && <div className="people"><button className={person === null ? "selected" : ""} onClick={() => setPerson(null)}>全部照片</button>{groups.map((g, i) => <button key={i} className={person === i ? "selected" : ""} onClick={() => setPerson(i)}><img src={g.avatar} alt="" />{g.name} · {g.photos.length}</button>)}</div>}
-          {busy ? <p>正在读取文件夹…</p> : <><div className="folders">{listing.dirs.map(d => <button key={d.docid} onClick={() => navigate(d, [...trail, d])}><FolderOpen size={20} />{d.name}</button>)}</div><div className="photo-grid">{photos.map(file => <Thumb key={file.docid} file={file} session={session} selectable={selecting} selectionDisabled={moving} selected={selectedPhotos.includes(file.docid)} onSelect={() => setSelectedPhotos(items => items.includes(file.docid) ? items.filter(i => i !== file.docid) : items.length < 100 ? [...items, file.docid] : items)} hidden={person !== null && !groups[person]?.photos.includes(file.docid)} onReady={(id, url) => { urls.current.set(id, url); setReadyCount(n => n + 1); }} />)}</div>{photos.length === 0 && <div className="empty">这个相册还没有照片，去上传页选择此相册即可添加。</div>}</>}
+          <PersonFinder key={`${album.id}|${trail.at(-1)?.docid}`} session={session} album={album} photos={photos} onFilter={setMatchedPhotos} />
+          {busy ? <p>正在读取文件夹…</p> : <><div className="folders">{listing.dirs.map(d => <button key={d.docid} onClick={() => navigate(d, [...trail, d])}><FolderOpen size={20} />{d.name}</button>)}</div><div className="photo-grid">{photos.map(file => <Thumb key={file.docid} file={file} session={session} selectable={selecting} selectionDisabled={moving} selected={selectedPhotos.includes(file.docid)} onSelect={() => setSelectedPhotos(items => items.includes(file.docid) ? items.filter(i => i !== file.docid) : items.length < 100 ? [...items, file.docid] : items)} hidden={matchedPhotos !== null && !matchedPhotos.includes(file.docid)} onReady={(id, url) => { urls.current.set(id, url); setReadyCount(n => n + 1); }} />)}</div>{photos.length === 0 && <div className="empty">这个相册还没有照片，去上传页选择此相册即可添加。</div>}</>}
         </>}
         {error && <p className="error" role="alert">{error}</p>}
       </>}
