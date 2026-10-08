@@ -6,6 +6,11 @@ import { faceKey } from "./people.js";
 const INDEX = /^__run_faces_v3_([a-f0-9]{32})_([a-f0-9]{32})_([a-f0-9]{32})\.json$/i;
 const LEGACY = /^__run_faces_v2_([a-f0-9]{32})_([a-f0-9]{32})_([a-f0-9]{32})\.json$/i;
 export function faceIndexKey(file) { return `${file.docid}|${file.rev}`; }
+// Indices without diagnostics may also have silently skipped profile faces.
+// A fresh diagnostic record has no pose-only rejection, so this is resumable.
+export function needsFaceDetailsUpdate(detail) {
+  return !detail || detail.rejected.some(face => face.reason === "侧脸角度过大");
+}
 export function validateFaceIndex(record, file) {
   if (record?.version !== 3 || record.engine !== FACE_ENGINE || record.docid !== file.docid || record.rev !== file.rev || !Array.isArray(record.faces) || record.faces.length > 200) throw new Error("人脸索引与当前模型或照片版本不一致，请补建");
   for (const face of record.faces) {

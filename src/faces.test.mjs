@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
 import { buildPeople } from "./people.js";
 import { analyzePhoto, detectOriginalFaces, describeDetectedFaces, prepareFaceAnalysis } from "./faces.js";
-import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices } from "./face-cache.js";
+import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices, needsFaceDetailsUpdate } from "./face-cache.js";
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
@@ -50,6 +50,32 @@ test("quality filter rejects small, blurred or low-confidence faces", () => {
   for(let i=0;i<112*112;i++){const value=(i+Math.floor(i/112))%2?255:0;pixels.set([value,value,value,255],i*4);}
   assert.equal(faceQualityReason(box,pixels),"");
 });
+test("profile landmarks pass quality checks despite nose offset and compressed eye spacing", () => {
+  const pixels=new Uint8ClampedArray(112*112*4);
+  for(let i=0;i<112*112;i++){const value=(i+Math.floor(i/112))%2?255:0;pixels.set([value,value,value,255],i*4);}
+  for(const landmarks of [
+    [[40,40],[45,40],[75,65],[43,88],[55,88]],
+    [[40,40],[40.5,40],[60,65],[42,88],[54,88]],
+  ]) {
+    const box={width:100,height:100,score:.9,landmarks};
+    assert.equal(faceQualityReason(box),"");
+    assert.equal(faceQualityReason(box,pixels),"");
+    assert.ok(similarityTransform(landmarks).every(Number.isFinite));
+    assert.equal(faceQualityReason(box,new Uint8ClampedArray(pixels.length)),"人脸模糊");
+  }
+});
+test("invalid or collapsed landmarks remain excluded without failing the whole photo", () => {
+  for(const landmarks of [undefined,[[1,2]],Array(5).fill([1,1]),[...ALIGN_POINTS.slice(0,4),[NaN,1]]]) {
+    assert.equal(faceQualityReason({width:100,height:100,score:.9,landmarks}),"关键点无效");
+  }
+});
+test("profile reindex covers old missing diagnostics and pose rejections, then stops after update", () => {
+  assert.equal(needsFaceDetailsUpdate(undefined),true);
+  assert.equal(needsFaceDetailsUpdate({rejected:[{reason:"侧脸角度过大"},{reason:"人脸太小"}]}),true);
+  assert.equal(needsFaceDetailsUpdate({rejected:[{reason:"人脸太小"}]}),false);
+  assert.equal(needsFaceDetailsUpdate({rejected:[]}),false);
+});
+
 test("average grouping blocks chain merges through a single similar vector", () => {
   const vector=degrees=>[Math.cos(degrees*Math.PI/180),Math.sin(degrees*Math.PI/180)];
   const groups=[];

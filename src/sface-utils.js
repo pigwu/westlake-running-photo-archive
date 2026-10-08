@@ -69,10 +69,12 @@ export function blurVariance(rgba,width,height) {
 export function faceQualityReason(box,pixels,size=112) {
   if(box.score<.7)return"低置信度";
   if(Math.min(box.width,box.height)<42)return"人脸太小";
-  const[left,right,nose]=box.landmarks||[];
-  if(!left||!right||!nose)return"关键点无效";
-  const eyeDistance=Math.hypot(right[0]-left[0],right[1]-left[1]);
-  if(eyeDistance<1||Math.hypot(nose[0]-(left[0]+right[0])/2,nose[1]-(left[1]+right[1])/2)/eyeDistance>1.1)return"侧脸角度过大";
+  // Compressed eye spacing is expected in profile views. Validate alignment
+  // itself instead of treating a nose/eye ratio as a pose rejection rule.
+  try {
+    const transform = similarityTransform(box.landmarks);
+    if (!transform.every(Number.isFinite) || Math.hypot(transform[0], transform[1]) < 1e-8) return "关键点无效";
+  } catch { return "关键点无效"; }
   if(pixels&&blurVariance(pixels,size,size)<25)return"人脸模糊";
   return"";
 }

@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ScanFace, X, Upload } from "lucide-react";
 import { originalPhotoBlob } from "./westlake.js";
-import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds } from "./face-cache.js";
+import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds, needsFaceDetailsUpdate } from "./face-cache.js";
 import { indexedFaces } from "./people.js";
 import { loadReviews, saveReview } from "./people-review.js";
 import PeoplePanel from "./PeoplePanel.jsx";
@@ -70,6 +70,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     if (!active.startsWith("reference-")) { setActive(""); onFilter(null); }
   }
   const indexed = photos.filter(p => indices.has(faceIndexKey(p))).length;
+  const detailUpdates = photos.filter(p => needsFaceDetailsUpdate(diagnostics.get(faceIndexKey(p)))).length;
   const rootDocid = album.rootDocid || photos[0]?.docid.split("/").slice(0, 3).join("/");
   async function readIndex() {
     setActive(""); onFilter(null);
@@ -85,7 +86,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     } catch (e) { if (!abort.signal.aborted) { setError(e.message); setStatus("读取未完成，请重试「刷新索引与纠错」。"); } }
     finally { if (operation.current === abort) setBusy(false); }
   }
-  async function buildIndex(withDetails = false) {
+  async function buildIndex(mode = "missing") {
     setActive(""); onFilter(null);
     setBusy(true); setError(""); setStatus("准备补建人脸索引…");
     const abort = new AbortController(); operation.current = abort;
@@ -97,7 +98,10 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
       // A shared model failure should stop the batch before any original
       // downloads, rather than reporting the same error for all 14 photos.
       await prepareFaceAnalysis({ signal: abort.signal, onProgress: setStatus });
-      const missing = photos.filter(p => !next.has(faceIndexKey(p)) || (withDetails && !nextDetails.has(faceIndexKey(p))));
+      const missing = photos.filter(p => {
+        const key = faceIndexKey(p);
+        return !next.has(key) || (mode === "details" && needsFaceDetailsUpdate(nextDetails.get(key)));
+      });
       for (let i = 0; i < missing.length; i++) {
         if (abort.signal.aborted) break;
         const progress = message => { if (!abort.signal.aborted) setStatus(`照片 ${i + 1}/${missing.length} · ${message}`); };
@@ -169,9 +173,9 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
       <p className="face-status">{loaded ? `${indexed}/${photos.length} 张照片已有共享索引 · ${grouping ? "正在全量分组…" : `${model.groups.filter(g => g.manual || g.faces.length > 1).length} 个人物组 · ${model.pending.length} 张待确认`}` : "请读取共享索引与纠错记录"}。索引包含人脸小图和特征，保存在当前公开网盘分享中。</p>
       <div className="match-slider"><div className="match-slider-heading"><label>匹配门槛 <output>{threshold.toFixed(2)}</output><input aria-label="人脸匹配门槛" type="range" min={MIN_MATCH_THRESHOLD} max={MAX_MATCH_THRESHOLD} step="0.01" value={threshold} disabled={busy} onChange={e => changeThreshold(e.target.value)} aria-valuetext={`${threshold.toFixed(2)}，数值越低越宽松`} /></label><button className="subtle" disabled={busy || threshold === FACE_MATCH_THRESHOLD} onClick={() => changeThreshold(FACE_MATCH_THRESHOLD)}>重置为 {FACE_MATCH_THRESHOLD.toFixed(2)}</button></div><div className="match-slider-scale"><span>0.10 · 更宽松</span><span>0.80 · 更严格</span></div><p className="upload-help">拖动即可更新分组，无需重建索引；已选参照人脸会自动重新比对。此设置仅影响你的浏览器，自动记住，下次打开仍生效。</p></div>
       {legacyCount > 0 && <p className="upload-help">已升级人脸识别，{legacyCount} 张照片的旧索引需要补建一次，照片无需重新上传。</p>}
-      <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引与纠错</button><button disabled={busy || !loaded || indexed === photos.length || !album.canUpload} onClick={() => buildIndex(false)}>补建人脸索引（{photos.length - indexed} 张）</button><button className="subtle" disabled={busy || !loaded || diagnostics.size === photos.length || !album.canUpload} onClick={() => buildIndex(true)}>补充检测详情（{photos.length - diagnostics.size} 张）</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
+      <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引与纠错</button><button disabled={busy || !loaded || indexed === photos.length || !album.canUpload} onClick={() => buildIndex("missing")}>补建人脸索引（{photos.length - indexed} 张）</button><button className="subtle" disabled={busy || !loaded || detailUpdates === 0 || !album.canUpload} onClick={() => buildIndex("details")}>补充检测详情（{detailUpdates} 张）</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
       <input ref={referenceInput} className="file-picker" type="file" accept=".jpg,.jpeg,.png,.webp" aria-label="选择人脸参照照片" onChange={e => { chooseReference(e.target.files[0]); e.target.value = ""; }} />
-      <p className="upload-help">电脑、手机均在本机处理，参照照片不会上传。首次分析需下载约 51 MB 模型和运行文件。检测到但被排除的人脸会保留原因供人工检查。旧索引可以直接用于新版分组；需要查看检测详情时，点一次「补充检测详情」。</p>
+      <p className="upload-help">电脑、手机均在本机处理，参照照片不会上传。首次分析需下载约 51 MB 模型和运行文件。侧脸也会尝试提取特征并参与自动分组；检测到但因太小、模糊等原因被排除的人脸会保留原因供人工检查。旧索引可以直接用于新版分组；需要查看检测详情或更新旧的侧脸排除记录时，点一次「补充检测详情」。</p>
       {status && <p className="face-status" role="status">{status}</p>}{error && <p className="error" role="alert">{error}</p>}
       {references.length > 0 && <div className="reference-faces"><p>参照照片中的人脸：</p><div className="people">{references.map((face, i) => <button key={i} disabled={busy} className={active === `reference-${i}` ? "selected" : ""} onClick={() => selectReference(face, i)}><img src={face.avatar} alt="" />参照人脸 {i + 1}</button>)}</div></div>}
       {loaded && <PeoplePanel key={`${scope}|${signature}|${threshold}`} model={model} faces={faces} disabled={busy || grouping} canEdit={album.canUpload} onFilter={ids => { setActive(""); onFilter(ids); }} onSave={persistReview} />}
