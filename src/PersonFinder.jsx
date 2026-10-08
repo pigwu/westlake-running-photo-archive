@@ -3,6 +3,7 @@ import { ScanFace, X, Upload } from "lucide-react";
 import { originalPhotoBlob } from "./westlake.js";
 import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds } from "./face-cache.js";
 import { groupDetectedFaces } from "./face-utils.js";
+import { MATCHING_PRESETS } from "./sface-utils.js";
 
 export default function PersonFinder({ session, album, photos, onFilter }) {
   const [opened, setOpened] = useState(false);
@@ -14,7 +15,8 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   const [active, setActive] = useState("");
   const [references, setReferences] = useState([]);
   const [legacyCount, setLegacyCount] = useState(0);
-  const [strict, setStrict] = useState(false);
+  const [matching, setMatching] = useState("standard");
+  const preset = MATCHING_PRESETS[matching];
   const operation = useRef(null), referenceInput = useRef(null);
   const legacyKeys = useRef([]);
   const signature = photos.map(faceIndexKey).join("\n");
@@ -24,9 +26,9 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   }, [signature]);
   const groups = useMemo(() => {
     const found = [];
-    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid, strict ? .6 : .5);
+    for (const photo of photos) groupDetectedFaces(found, indices.get(faceIndexKey(photo)) || [], photo.docid, preset.group, preset.pairFloor);
     return found;
-  }, [indices, signature, strict]);
+  }, [indices, signature, preset]);
   const indexed = photos.filter(p => indices.has(faceIndexKey(p))).length;
   const rootDocid = album.rootDocid || photos[0]?.docid.split("/").slice(0, 3).join("/");
   async function readIndex() {
@@ -94,7 +96,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     finally { URL.revokeObjectURL(url); if (operation.current === abort) setBusy(false); }
   }
   function selectReference(face, index) {
-    const matches = referencePhotoIds([face], indices, photos, strict ? .6 : .45);
+    const matches = referencePhotoIds([face], indices, photos, preset.reference);
     onFilter(matches); setActive(`reference-${index}`);
     setStatus(`找到 ${matches.length} 张相似照片。结果可能有遗漏或误匹配，请人工确认。`);
   }
@@ -103,7 +105,8 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
       <div className="finder-heading"><h2><ScanFace size={20} />按人找照片</h2><button className="subtle" disabled={busy} aria-label="关闭人物筛选" onClick={() => { setOpened(false); setActive(""); onFilter(null); }}><X size={18} /></button></div>
       <p className="face-status">{loaded ? `${indexed}/${photos.length} 张照片已有共享索引 · ${groups.length} 个人物组` : "正在读取索引"}。索引包含人脸小图和特征，保存在当前公开网盘分享中。分组需人工确认。</p>
       {legacyCount > 0 && <p className="upload-help">已升级人脸识别，{legacyCount} 张照片的旧索引需要补建一次，照片无需重新上传。</p>}
-      <label className="finder-strict"><input type="checkbox" checked={strict} disabled={busy} onChange={e => { setStrict(e.target.checked); setActive(""); onFilter(null); }} />更严格地匹配（减少误分，可能漏掉部分照片）</label>
+      <label className="finder-strict">匹配范围<select aria-label="匹配范围" value={matching} disabled={busy} onChange={e => { setMatching(e.target.value); setActive(""); onFilter(null); setStatus("匹配范围已更新，请重新选择人物头像或参照人脸。"); }}><option value="standard">标准匹配（默认）</option><option value="relaxed">更宽松地匹配（减少人物拆分）</option><option value="strict">更严格地匹配（减少混入别人）</option></select></label>
+      <p className="upload-help">同一个人被分成多个组时，试试“更宽松地匹配”；混入其他人时，改用“更严格地匹配”。切换立即使用已有索引重新分组，无需重建索引。</p>
       <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引</button><button disabled={busy || !loaded || indexed === photos.length || !album.canUpload} onClick={buildIndex}>补建人脸索引（{photos.length - indexed} 张）</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
       <input ref={referenceInput} className="file-picker" type="file" accept=".jpg,.jpeg,.png,.webp" aria-label="选择人脸参照照片" onChange={e => { chooseReference(e.target.files[0]); e.target.value = ""; }} />
       <p className="upload-help">电脑、手机均在本机处理，参照照片不会上传。首次分析需下载约 51 MB 模型和运行文件。模糊、小脸和大角度侧脸会跳过；计算时保持页面打开。手机也可只上传照片，稍后由电脑补建。</p>
