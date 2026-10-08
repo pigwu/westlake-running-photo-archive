@@ -50,6 +50,7 @@ function SharedArchive() {
   const [month, setMonth] = useState("");
   const [album, setAlbum] = useState(null);
   const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [session, setSession] = useState(null);
   const [listing, setListing] = useState({ dirs: [], files: [] });
   const [trail, setTrail] = useState([]);
@@ -80,16 +81,19 @@ function SharedArchive() {
   function closeAlbum() {
     clearView(); setAlbum(null); setSession(null); setPassword(""); setError(""); setListing({ dirs: [], files: [] }); setTrail([]); setBusy(false);
   }
-  async function unlock(e) {
-    e.preventDefault(); setBusy(true); setError("");
+  useEffect(() => {
+    if (album && !session) { setNeedsPassword(false); unlock(null, album.accessPassword || ""); }
+  }, [album]);
+  async function unlock(e, accessPassword = password || album?.accessPassword || "") {
+    e?.preventDefault(); setBusy(true); setError("");
     const version = generation.current;
     try {
       const link = parseShare(album.url);
-      const info = await shareRequest(link, password, "get");
-      const data = info.size === -1 ? await shareRequest(link, password, "listdir", { docid: info.docid, attr: [], by: "name", sort: "asc" }) : { dirs: [], files: [info] };
+      const info = await shareRequest(link, accessPassword, "get");
+      const data = info.size === -1 ? await shareRequest(link, accessPassword, "listdir", { docid: info.docid, attr: [], by: "name", sort: "asc" }) : { dirs: [], files: [info] };
       if (version !== generation.current) return;
-      setSession({ link, password }); setPassword(""); setListing(data); setTrail([{ docid: info.docid, name: "相册" }]);
-    } catch (e) { if (version === generation.current) setError(e.message === "Failed to fetch" ? "无法连接学校网盘，请检查网络，或直接打开网盘链接" : e.message); }
+      setSession({ link, password: accessPassword }); setPassword(""); setListing(data); setTrail([{ docid: info.docid, name: "相册" }]);
+    } catch (e) { if (version === generation.current) { setNeedsPassword(e.code === 401002); setError(e.code === 401002 ? "网盘分享密码已变更，请更新相册连接或输入新密码。" : e.message === "Failed to fetch" ? "无法连接学校网盘，请检查网络，或直接打开网盘链接" : e.message); } }
     finally { if (version === generation.current) setBusy(false); }
   }
   async function navigate(folder, nextTrail) {
@@ -143,8 +147,8 @@ function SharedArchive() {
         {!configError && filtered.length === 0 && <div className="empty">没有符合条件的相册。</div>}
       </> : <>
         <button className="back" onClick={closeAlbum}><ArrowLeft size={17} />全部相册</button><div className="album-heading"><div><span className="eyebrow">{album.activity}</span><h1>{album.title}</h1><p>{album.date || "拍摄日期待标记"}</p></div><a className="external" href={album.url} target="_blank" rel="noopener noreferrer">在网盘中打开 <ArrowUpRight size={17} /></a></div>
-        {!session ? <form className="unlock" onSubmit={unlock}><LockKeyhole size={28} /><h2>输入网盘分享密码</h2><p>密码只用于本次读取，关闭相册即清除。</p><label>分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} autoFocus placeholder="若分享无密码，留空即可" /></label><button disabled={busy}>{busy ? "正在连接学校网盘…" : "打开照片"}</button></form> : <>
-          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={busy || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{photos.length} 张照片</span><button disabled={!ready || busy || analyzing} onClick={analyze}><ScanFace size={17} />{analyzing ? "分析中…" : "本机人脸分组"}</button><button className="subtle" onClick={() => { clearView(); setReadyCount(0); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />锁定</button></div>
+        {!session ? <form className="unlock" onSubmit={unlock}><FolderOpen size={28} /><h2>{needsPassword ? "更新相册连接" : "连接学校网盘"}</h2><p>无需填写密码，自动打开共享照片。</p>{needsPassword && <label>分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} autoFocus placeholder="输入更新后的分享密码" /></label>}<button disabled={busy}>{busy ? "正在连接学校网盘…" : "打开照片"}</button></form> : <>
+          <div className="gallery-toolbar"><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={busy || i === trail.length - 1} onClick={() => navigate(folder, trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div><span>{photos.length} 张照片</span><button disabled={!ready || busy || analyzing} onClick={analyze}><ScanFace size={17} />{analyzing ? "分析中…" : "本机人脸分组"}</button><button className="subtle" onClick={() => { clearView(); setReadyCount(0); setSession(null); setListing({ dirs: [], files: [] }); }}><X size={16} />断开连接</button></div>
           {faceStatus && <p className="face-status" role="status">{faceStatus}</p>}
           {groups.length > 0 && <div className="people"><button className={person === null ? "selected" : ""} onClick={() => setPerson(null)}>全部照片</button>{groups.map((g, i) => <button key={i} className={person === i ? "selected" : ""} onClick={() => setPerson(i)}><img src={g.avatar} alt="" />{g.name} · {g.photos.length}</button>)}</div>}
           {busy ? <p>正在读取文件夹…</p> : <><div className="folders">{listing.dirs.map(d => <button key={d.docid} onClick={() => navigate(d, [...trail, d])}><FolderOpen size={20} />{d.name}</button>)}</div><div className="photo-grid">{photos.map(file => <Thumb key={file.docid} file={file} session={session} hidden={person !== null && !groups[person]?.photos.includes(file.docid)} onReady={(id, url) => { urls.current.set(id, url); setReadyCount(n => n + 1); }} />)}</div>{photos.length === 0 && <div className="empty">当前文件夹没有可预览照片，可进入子文件夹或在网盘中查看。</div>}</>}

@@ -7,6 +7,7 @@ export default function Uploader({ albums, onOpen }) {
   const [id, setId] = useState("");
   const album = albums.find(a => a.id === id) || albums[0];
   const [password, setPassword] = useState("");
+  const [needsPassword, setNeedsPassword] = useState(false);
   const [session, setSession] = useState(null);
   const [trail, setTrail] = useState([]);
   const [listing, setListing] = useState({ dirs: [], files: [] });
@@ -20,18 +21,24 @@ export default function Uploader({ albums, onOpen }) {
   const operation = useRef(null);
   const fileInput = useRef(null);
   useEffect(() => () => operation.current?.abort(), []);
-  async function connect(e) {
-    e.preventDefault(); setConnecting(true); setError("");
+  useEffect(() => {
+    if (!album || isExpired(album)) return;
+    setSession(null); setQueue([]); setTrail([]); setNeedsPassword(false);
+    connect(null, album.accessPassword || "");
+    return () => operation.current?.abort();
+  }, [album]);
+  async function connect(e, accessPassword = password || album?.accessPassword || "") {
+    e?.preventDefault(); setConnecting(true); setError("");
     const abort = new AbortController(); operation.current = abort;
     try {
       const link = parseShare(album.url);
-      const info = await shareRequest(link, password, "get", {}, abort.signal);
+      const info = await shareRequest(link, accessPassword, "get", {}, abort.signal);
       if (info.size !== -1) throw new Error("请使用文件夹分享链接上传照片");
       if (!(info.perm & 4)) throw new Error("此分享未开启上传权限，请在学校网盘共享设置中勾选“上传”");
-      const data = await shareRequest(link, password, "listdir", { docid: info.docid, attr: [], by: "name", sort: "asc" }, abort.signal);
+      const data = await shareRequest(link, accessPassword, "listdir", { docid: info.docid, attr: [], by: "name", sort: "asc" }, abort.signal);
       if (abort.signal.aborted) return;
-      setSession({ link, password }); setPassword(""); setTrail([{ docid: info.docid, name: album.title }]); setListing(data);
-    } catch (e) { if (!abort.signal.aborted) setError(e.message); }
+      setSession({ link, password: accessPassword }); setPassword(""); setTrail([{ docid: info.docid, name: album.title }]); setListing(data);
+    } catch (e) { if (!abort.signal.aborted) { setNeedsPassword(e.code === 401002); setError(e.code === 401002 ? "网盘分享密码已变更，请更新相册连接或输入新密码。" : e.message); } }
     finally { if (!abort.signal.aborted) setConnecting(false); }
   }
   async function navigate(next) {
@@ -90,8 +97,8 @@ export default function Uploader({ albums, onOpen }) {
   }
   return <section className="uploader">
     <div className="intro"><div><span className="eyebrow">CONTRIBUTE YOUR MEMORIES</span><h1>把你的照片，留在这里<span>。</span></h1><p>选择相册上传原图，日期默认当天，活动名称可选。</p></div><Upload size={40} strokeWidth={1} /></div>
-    {!session ? <form className="upload-connect" onSubmit={connect}><div className="upload-section-title"><LockKeyhole size={21} /><h2>连接上传相册</h2></div><div className="upload-fields"><label>目标相册<select value={album?.id || ""} disabled={connecting} onChange={e => { setId(e.target.value); setError(""); }}>{albums.map(a => <option key={a.id} value={a.id} disabled={isExpired(a)}>{a.title}{isExpired(a) ? "（已到期）" : ""}</option>)}</select></label><label>网盘分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="输入目标相册的分享密码" disabled={connecting} /></label></div><p className="upload-help">分享需开启上传权限。密码仅保留在当前页面。</p><button disabled={!album || isExpired(album) || connecting}>{connecting ? "连接中…" : "进入上传页面"}</button></form> : <>
-      <div className="upload-destination"><FolderOpen size={22} /><div><small>照片将保存到</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />更换相册 / 锁定</button></div>
+    {!session ? <form className="upload-connect" onSubmit={connect}><div className="upload-section-title"><LockKeyhole size={21} /><h2>连接上传相册</h2></div><div className="upload-fields"><label>目标相册<select value={album?.id || ""} disabled={connecting} onChange={e => { setId(e.target.value); setError(""); }}>{albums.map(a => <option key={a.id} value={a.id} disabled={isExpired(a)}>{a.title}{isExpired(a) ? "（已到期）" : ""}</option>)}</select></label>{needsPassword && <label>网盘分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="输入目标相册的分享密码" disabled={connecting} /></label>}</div><p className="upload-help">自动连接学校网盘，无需填写密码。</p><button disabled={!album || isExpired(album) || connecting}>{connecting ? "连接中…" : "进入上传页面"}</button></form> : <>
+      <div className="upload-destination"><FolderOpen size={22} /><div><small>照片将保存到</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />更换相册</button></div>
       {listing.dirs.length > 0 && <div className="folders">{listing.dirs.map(d => <button key={d.docid} disabled={running || connecting} onClick={() => navigate([...trail, d])}><FolderOpen size={18} />{d.name}</button>)}</div>}
       <div className="upload-fields"><label>活动名称（选填）<input value={activity} disabled={running} onChange={e => setActivity(e.target.value)} placeholder="不填则不标记活动" maxLength={40} /></label><label>拍摄日期<input type="date" value={date} disabled={running} onChange={e => setDate(e.target.value)} /></label></div>
       <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。原始图片内容保持不变。上传时请保持本页打开。</p>

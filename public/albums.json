@@ -4,7 +4,8 @@
     "title": "跑团照片共享相册",
     "activity": "待标记活动",
     "date": "",
-    "description": "学校网盘共享照片，输入分享密码后浏览。",
+    "description": "跑友可直接浏览、下载和上传照片。",
+    "accessPassword": "5FVq",
     "url": "https://pan.westlake.edu.cn/link/B4C62AC1615586A953161732B30A018F",
     "expiresAt": "2026-11-06T23:59:59+08:00"
   }

@@ -52,8 +52,8 @@ test("download rejects unexpected destinations and unavailable permission", asyn
   globalThis.fetch = async () => Response.json({ authrequest: [] });
   await assert.rejects(originalDownload("id", "secret", {}), /下载权限/);
 });
-test("public album metadata does not store a password or invented shooting date", async () => {
+test("public album metadata uses only the intentionally public share credential and no invented date", async () => {
   const albums = JSON.parse(await readFile(new URL("../public/albums.json", import.meta.url), "utf8"));
   assert.equal(albums[0].date, "");
-  for (const album of albums) { assert.equal("password" in album, false); parseShare(album.url); }
+  for (const album of albums) { assert.equal("password" in album, false); assert.equal(typeof album.accessPassword, "string"); parseShare(album.url); }
 });
