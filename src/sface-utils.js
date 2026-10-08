@@ -1,13 +1,7 @@
 export const FACE_ENGINE = "yunet-2026may-sface-2021dec-align-v1";
 export const FEATURE_SIZE = 128;
-export const GROUP_THRESHOLD = 0.45;
-export const REFERENCE_THRESHOLD = 0.4;
-export const GROUP_PAIR_FLOOR = 0.25;
-export const MATCHING_PRESETS = {
-  standard: { group: GROUP_THRESHOLD, reference: REFERENCE_THRESHOLD, pairFloor: GROUP_PAIR_FLOOR },
-  relaxed: { group: 0.3, reference: 0.28, pairFloor: 0.1 },
-  strict: { group: 0.6, reference: 0.6, pairFloor: 0.3 },
-};
+export const FACE_MATCH_THRESHOLD = 0.15;
+export const GROUP_PAIR_FLOOR = 0.1;
 export const ALIGN_POINTS = [[38.2946,51.6963],[73.5318,51.5014],[56.0252,71.7366],[41.5493,92.3655],[70.7299,92.2041]];
 export function normalizeDescriptor(values) {
   const norm = Math.hypot(...values);

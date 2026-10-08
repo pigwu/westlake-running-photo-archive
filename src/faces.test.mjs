@@ -6,7 +6,7 @@ import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, load
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
-import { FACE_ENGINE, ALIGN_POINTS, MATCHING_PRESETS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor } from "./sface-utils.js";
+import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor } from "./sface-utils.js";
 
 test("ONNX inputs retain raw pixel values in the model's expected channel order", () => {
   const rgba=new Uint8ClampedArray([10,20,30,255,40,50,60,255]);
@@ -49,45 +49,22 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
 });
 
-test("standard matching joins moderately similar saved vectors that the previous default split", () => {
-  const candidate=[.47,Math.sqrt(1-.47**2)];
-  const groups=[];
-  groupDetectedFaces(groups,[{descriptor:[1,0]}],"one");
-  groupDetectedFaces(groups,[{descriptor:candidate}],"two");
-  assert.equal(groups.length,1);
-  const previous=[];
-  groupDetectedFaces(previous,[{descriptor:[1,0]}],"one",.5,.3);
-  groupDetectedFaces(previous,[{descriptor:candidate}],"two",.5,.3);
-  assert.equal(previous.length,2);
-});
-test("relaxed matching recovers borderline vectors while strict matching keeps them separate", () => {
+test("grouping and reference lookup both use the single inclusive 0.15 threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  const faces=[{descriptor:[1,0]},{descriptor:[.32,Math.sqrt(1-.32**2)]}];
-  const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
-  for(const [name,preset] of Object.entries(MATCHING_PRESETS)){
+  for(const similarity of[.14,.15,.16,.2]){
+    const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
+    const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
     const groups=[];
-    photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid,preset.group,preset.pairFloor));
-    assert.equal(groups.length,name==="relaxed"?1:2);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,preset.reference),name==="relaxed"?["one","two"]:["one"]);
+    photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid));
+    assert.equal(groups.length,similarity>=.15?1:2,`grouping at ${similarity}`);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.15?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
-  const previous=[];
-  photos.forEach((photo,i)=>groupDetectedFaces(previous,[faces[i]],photo.docid,.38,.2));
-  assert.equal(previous.length,2);
-  assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,.36),["one"]);
 });
-test("wider matching still rejects an endpoint below the group similarity floor", () => {
-  const preset=MATCHING_PRESETS.relaxed,groups=[];
+test("single matching retains the previous relaxed floor to limit chain merges", () => {
+  const groups=[];
   const faces=[[1,0],[.5,Math.sqrt(.75)],[.09,Math.sqrt(1-.09**2)]];
-  faces.forEach((descriptor,i)=>groupDetectedFaces(groups,[{descriptor}],String(i),preset.group,preset.pairFloor));
+  faces.forEach((descriptor,i)=>groupDetectedFaces(groups,[{descriptor}],String(i)));
   assert.equal(groups.length,2);assert.deepEqual(groups[0].photos,["0","1"]);
-});
-test("relaxed grouping still blocks long chains through unlike endpoints", () => {
-  const groups=[],preset=MATCHING_PRESETS.relaxed;
-  for(const [i,angle] of[0,55,105].entries()){
-    const radians=angle*Math.PI/180;
-    groupDetectedFaces(groups,[{descriptor:[Math.cos(radians),Math.sin(radians)]}],String(i),preset.group,preset.pairFloor);
-  }
-  assert.equal(groups.length,2);
 });
 
 test("legacy indices are counted without downloading their incompatible vectors", async t => {
@@ -124,13 +101,11 @@ test("deduplication removes overlapping tile detections but keeps adjacent faces
 });
 test("different detections in the same photo never collapse into one group", () => {
   const faces = [{descriptor:[1,0],avatar:"a"},{descriptor:[1,.01],avatar:"b"}];
-  for(const preset of Object.values(MATCHING_PRESETS)){
-    const groups=[];
-    groupDetectedFaces(groups,faces,"photo-one",preset.group,preset.pairFloor);
-    assert.equal(groups.length,2);
-    groupDetectedFaces(groups,[{descriptor:[1,0],avatar:"c"}],"photo-two",preset.group,preset.pairFloor);
-    assert.equal(groups.length,2); assert.equal(groups[0].photos.length,2);
-  }
+  const groups=[];
+  groupDetectedFaces(groups,faces,"photo-one");
+  assert.equal(groups.length,2);
+  groupDetectedFaces(groups,[{descriptor:[1,0],avatar:"c"}],"photo-two");
+  assert.equal(groups.length,2); assert.equal(groups[0].photos.length,2);
 });
 test("stop is honored before loading or decoding any original or models", async () => {
   const signal = AbortSignal.abort();

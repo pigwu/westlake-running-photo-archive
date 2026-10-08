@@ -1,6 +1,6 @@
 import { shareRequest, originalDownload } from "./westlake.js";
 import { uploadStoredFile } from "./upload.js";
-import { FACE_ENGINE, FEATURE_SIZE, cosineSimilarity, REFERENCE_THRESHOLD } from "./sface-utils.js";
+import { FACE_ENGINE, FEATURE_SIZE, cosineSimilarity, FACE_MATCH_THRESHOLD } from "./sface-utils.js";
 
 const INDEX = /^__run_faces_v3_([a-f0-9]{32})_([a-f0-9]{32})_([a-f0-9]{32})\.json$/i;
 const LEGACY = /^__run_faces_v2_([a-f0-9]{32})_([a-f0-9]{32})_([a-f0-9]{32})\.json$/i;
@@ -56,11 +56,11 @@ export async function loadFaceIndices(session, rootDocid, photos, signal) {
   const legacyKeys = photos.filter(photo => !result.has(faceIndexKey(photo)) && legacy.has(`${photo.docid.split("/").at(-1).toUpperCase()}|${photo.rev.toUpperCase()}`)).map(faceIndexKey);
   return { indices: result, warnings, legacyCount: legacyKeys.length, legacyKeys };
 }
-export function referencePhotoIds(faces, indices, photos, threshold = REFERENCE_THRESHOLD) {
+export function referencePhotoIds(faces, indices, photos) {
   const found = [];
   for (const photo of photos) {
     const candidates = indices.get(faceIndexKey(photo)) || [];
-    if (faces.some(reference => candidates.some(face => cosineSimilarity(face.descriptor,reference.descriptor) >= threshold))) found.push(photo.docid);
+    if (faces.some(reference => candidates.some(face => cosineSimilarity(face.descriptor,reference.descriptor) >= FACE_MATCH_THRESHOLD))) found.push(photo.docid);
   }
   return found;
 }
