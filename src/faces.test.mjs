@@ -83,15 +83,15 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.ok(!groups.some(g=>g.photos.includes("0")&&g.photos.includes("2")));
 });
 
-test("grouping and reference lookup both default to the inclusive 0.30 threshold", () => {
+test("grouping and reference lookup both default to the inclusive 0.35 threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  for(const similarity of[.15,.23,.29,.30,.31]){
+  for(const similarity of[.23,.30,.34,.35,.36]){
     const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
     const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
     const groups=[];
     photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid));
-    assert.equal(groups.length,similarity>=.30?1:2,`grouping at ${similarity}`);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.30?["one","two"]:["one"],`reference lookup at ${similarity}`);
+    assert.equal(groups.length,similarity>=.35?1:2,`grouping at ${similarity}`);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.35?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
 });
 test("slider thresholds update grouping and reference matches using the same cached features", () => {
@@ -109,8 +109,8 @@ test("slider thresholds update grouping and reference matches using the same cac
   groupDetectedFaces(groups,[{descriptor:[1,0]},{descriptor:[1,0]}],"same-photo",.1);
   assert.equal(groups.length,2);
 });
-test("invalid saved or supplied slider values fall back to 0.30", () => {
-  for(const value of[null,undefined,"",NaN,Infinity,"invalid",-.1,0,.09,.81,{},true]) assert.equal(normalizeMatchThreshold(value),.30);
+test("invalid saved or supplied slider values fall back to 0.35", () => {
+  for(const value of[null,undefined,"",NaN,Infinity,"invalid",-.1,0,.09,.81,{},true]) assert.equal(normalizeMatchThreshold(value),.35);
   for(const value of[.1,.23,.8,"0.15"]) assert.equal(normalizeMatchThreshold(value),Number(value));
 });
 test("single matching retains the previous relaxed floor to limit chain merges", () => {
@@ -233,8 +233,11 @@ test("index failure after upload still reports saved original and never retransm
 });
 
 test("new default migrates the old default once while preserving custom and subsequent choices", () => {
- assert.equal(restoreMatchThreshold(null,null),.30);
- assert.equal(restoreMatchThreshold(null,"0.23"),.30);
+ assert.equal(restoreMatchThreshold(null,null,null),.35);
+ assert.equal(restoreMatchThreshold(null,"0.30","0.23"),.35);
+ assert.equal(restoreMatchThreshold(null,null,"0.23"),.35);
+ assert.equal(restoreMatchThreshold(null,"0.23","0.23"),.23);
+ assert.equal(restoreMatchThreshold("0.30","0.30"),.30);
  assert.equal(restoreMatchThreshold(null,"0.15"),.15);
  assert.equal(restoreMatchThreshold(null,"0.8"),.8);
  assert.equal(restoreMatchThreshold("0.23","0.23"),.23);
