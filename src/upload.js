@@ -21,6 +21,7 @@ export function uploadName(file, date, activity) {
   return name;
 }
 export function photoLabel(name) {
+  name = name.replace(/^__run_photo_[a-f0-9]{32}__/, "");
   const match = name.match(/^(\d{4}-\d{2}-\d{2})(?:_([^_]+))?__(.+)$/);
   return match ? { date: match[1], activity: match[2] || "", originalName: match[3] } : { date: "", activity: "", originalName: name };
 }
@@ -62,8 +63,12 @@ function sendOriginal(transport, signal, onProgress) {
     request.send(transport.body);
   });
 }
-export async function uploadPhoto(session, folder, file, name, { signal, onProgress = () => {}, transfer = sendOriginal } = {}) {
+export async function uploadPhoto(session, folder, file, name, options = {}) {
   validatePhoto(file);
+  return uploadStoredFile(session, folder, file, name, options);
+}
+export async function uploadStoredFile(session, folder, file, name, { signal, onProgress = () => {}, transfer = sendOriginal } = {}) {
+  if (file.size <= 0 || file.size > MAX_PHOTO_BYTES) throw new Error("文件大小不符合上传要求");
   const started = await shareRequest(session.link, session.password, "osbeginupload", {
     docid: folder, name, length: file.size, client_mtime: (file.lastModified || Date.now()) * 1000,
     ondup: 1, reqmethod: "POST", usehttps: true,

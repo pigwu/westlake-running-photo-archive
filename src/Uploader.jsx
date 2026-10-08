@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from "react";
 import { Upload, FolderOpen, ArrowLeft, CheckCircle2, X, LockKeyhole } from "lucide-react";
 import { parseShare, isExpired, shareRequest } from "./westlake";
-import { uploadName, validatePhoto, uploadPhoto, todayShanghai } from "./upload";
+import { validatePhoto, uploadPhoto, todayShanghai } from "./upload";
+import { albumPhotoName } from "./albums.js";
 
-export default function Uploader({ albums, onOpen }) {
+export default function Uploader({ albums, onOpen, onCreate, onRename, selectedAlbumId }) {
   const [id, setId] = useState("");
   const album = albums.find(a => a.id === id) || albums[0];
+  useEffect(() => { if (selectedAlbumId) setId(selectedAlbumId); }, [selectedAlbumId]);
   const [password, setPassword] = useState("");
   const [needsPassword, setNeedsPassword] = useState(false);
   const [session, setSession] = useState(null);
@@ -26,7 +28,7 @@ export default function Uploader({ albums, onOpen }) {
     setSession(null); setQueue([]); setTrail([]); setNeedsPassword(false);
     connect(null, album.accessPassword || "");
     return () => operation.current?.abort();
-  }, [album]);
+  }, [album?.id]);
   async function connect(e, accessPassword = password || album?.accessPassword || "") {
     e?.preventDefault(); setConnecting(true); setError("");
     const abort = new AbortController(); operation.current = abort;
@@ -67,7 +69,7 @@ export default function Uploader({ albums, onOpen }) {
     setError(""); setResult("");
     const pending = queue.filter(q => q.status !== "done");
     let names;
-    try { names = pending.map(q => uploadName(q.file, date, activity)); }
+    try { names = pending.map(q => albumPhotoName(q.file, date, activity, album.albumId)); }
     catch (e) { setError(e.message); return; }
     if (!pending.length) return;
     setRunning(true); const abort = new AbortController(); operation.current = abort;
@@ -96,9 +98,10 @@ export default function Uploader({ albums, onOpen }) {
     operation.current?.abort(); setSession(null); setPassword(""); setQueue([]); setTrail([]); setError(""); setResult("");
   }
   return <section className="uploader">
-    <div className="intro"><div><span className="eyebrow">CONTRIBUTE YOUR MEMORIES</span><h1>把你的照片，留在这里<span>。</span></h1><p>选择相册上传原图，日期默认当天，活动名称可选。</p></div><Upload size={40} strokeWidth={1} /></div>
+    <div className="intro"><div><span className="eyebrow">CONTRIBUTE YOUR MEMORIES</span><h1>把你的照片，留在这里<span>。</span></h1><p>每次活动一个相册，选择相册后上传照片。日期默认当天，活动名称可选。</p></div><Upload size={40} strokeWidth={1} /></div>
     {!session ? <form className="upload-connect" onSubmit={connect}><div className="upload-section-title"><LockKeyhole size={21} /><h2>连接上传相册</h2></div><div className="upload-fields"><label>目标相册<select value={album?.id || ""} disabled={connecting} onChange={e => { setId(e.target.value); setError(""); }}>{albums.map(a => <option key={a.id} value={a.id} disabled={isExpired(a)}>{a.title}{isExpired(a) ? "（已到期）" : ""}</option>)}</select></label>{needsPassword && <label>网盘分享密码<input type="password" autoComplete="off" value={password} onChange={e => setPassword(e.target.value)} placeholder="输入目标相册的分享密码" disabled={connecting} /></label>}</div><p className="upload-help">自动连接学校网盘，无需填写密码。</p><button disabled={!album || isExpired(album) || connecting}>{connecting ? "连接中…" : "进入上传页面"}</button></form> : <>
-      <div className="upload-destination"><FolderOpen size={22} /><div><small>照片将保存到</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />更换相册</button></div>
+      <div className="album-upload-controls"><label>上传到相册<select aria-label="上传到相册" value={album?.id || ""} disabled={running || connecting || queue.some(q => q.status !== "done")} onChange={e => { setId(e.target.value); setResult(""); }}>{albums.map(a => <option key={a.id} value={a.id} disabled={isExpired(a)}>{a.title}</option>)}</select></label><button className="subtle" disabled={running || connecting || queue.some(q => q.status !== "done")} onClick={onCreate}>＋ 新建相册</button><button className="subtle" disabled={running || connecting || queue.some(q => q.status !== "done")} onClick={() => onRename(album)}>重命名相册</button></div>
+      <div className="upload-destination"><FolderOpen size={22} /><div><small>网盘存储位置</small><div className="breadcrumbs">{trail.map((folder, i) => <button key={folder.docid} disabled={running || connecting || i === trail.length - 1} onClick={() => navigate(trail.slice(0, i + 1))}>{folder.name}{i < trail.length - 1 ? " /" : ""}</button>)}</div></div><button className="subtle" disabled={running || connecting} onClick={lock}><X size={17} />断开连接</button></div>
       {listing.dirs.length > 0 && <div className="folders">{listing.dirs.map(d => <button key={d.docid} disabled={running || connecting} onClick={() => navigate([...trail, d])}><FolderOpen size={18} />{d.name}</button>)}</div>}
       <div className="upload-fields"><label>活动名称（选填）<input value={activity} disabled={running} onChange={e => setActivity(e.target.value)} placeholder="不填则不标记活动" maxLength={40} /></label><label>拍摄日期<input type="date" value={date} disabled={running} onChange={e => setDate(e.target.value)} /></label></div>
       <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。原始图片内容保持不变。上传时请保持本页打开。</p>
