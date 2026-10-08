@@ -16,7 +16,7 @@ function savedThreshold() {
   catch { return FACE_MATCH_THRESHOLD; }
 }
 
-export default function PersonFinder({ session, album, photos, onFilter }) {
+export default function PersonFinder({ session, album, photos, onFilter, resetSelection = 0 }) {
   const [opened, setOpened] = useState(false);
   const [loaded, setLoaded] = useState(false);
   const [indices, setIndices] = useState(new Map());
@@ -33,6 +33,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
   const [threshold, setThreshold] = useState(savedThreshold);
   const operation = useRef(null), referenceInput = useRef(null);
   const legacyKeys = useRef([]);
+  useEffect(() => { setActive(""); }, [resetSelection]);
   const signature = photos.map(faceIndexKey).join("\n");
   const scope = `${session.link}|${album.rootDocid || ""}|${album.albumId || "legacy"}`;
   useEffect(() => {
@@ -60,7 +61,7 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
     if (!face) return;
     const excluded = new Set(Object.keys(review.assignments).filter(key => review.assignments[key] === "ignore"));
     const matches = referencePhotoIds([face], indices, photos, threshold, excluded);
-    onFilter(matches);
+    onFilter(matches, `参照人脸 ${Number(active.slice("reference-".length)) + 1}`);
     setStatus(`找到 ${matches.length} 张相似照片。结果可能有遗漏或误匹配，请人工确认。`);
   }, [threshold, indices, signature, active, references, review]);
   function changeThreshold(value) {
@@ -178,10 +179,10 @@ export default function PersonFinder({ session, album, photos, onFilter }) {
       <p className="upload-help">电脑、手机均在本机处理，参照照片不会上传。首次分析需下载约 51 MB 模型和运行文件。侧脸也会尝试提取特征并参与自动分组；检测到但因太小、模糊等原因被排除的人脸会保留原因供人工检查。旧索引可以直接用于新版分组；需要查看检测详情或更新旧的侧脸排除记录时，点一次「补充检测详情」。</p>
       {status && <p className="face-status" role="status">{status}</p>}{error && <p className="error" role="alert">{error}</p>}
       {references.length > 0 && <div className="reference-faces"><p>参照照片中的人脸：</p><div className="people">{references.map((face, i) => <button key={i} disabled={busy} className={active === `reference-${i}` ? "selected" : ""} onClick={() => selectReference(face, i)}><img src={face.avatar} alt="" />参照人脸 {i + 1}</button>)}</div></div>}
-      {loaded && <PeoplePanel key={`${scope}|${signature}|${threshold}`} model={model} faces={faces} disabled={busy || grouping} canEdit={album.canUpload} onFilter={ids => { setActive(""); onFilter(ids); }} onSave={persistReview} />}
+      {loaded && <PeoplePanel key={`${scope}|${signature}|${threshold}`} model={model} faces={faces} disabled={busy || grouping} canEdit={album.canUpload} onFilter={(ids, name) => { setActive(""); onFilter(ids, name); }} onSave={persistReview} />}
       {loaded && <details className="face-review-section"><summary>逐张照片检测状态 · {photos.length} 张</summary>{photos.map(photo => {
         const key = faceIndexKey(photo), detail = diagnostics.get(key), indexed = indices.has(key);
-        return <div className="detection-row" key={key}><span>{photoLabel(photo.name).originalName}</span><small>{!indexed ? "尚无可用索引" : !detail ? `已有 ${indices.get(key).length} 张清晰人脸；旧索引未保存排除原因` : detail.totalDetected === 0 ? "未检测到人脸" : `检测到 ${detail.totalDetected} 张脸 · ${detail.accepted} 张参与自动识别 · ${detail.rejected.length} 张保留原因${detail.totalDetected > detail.accepted + detail.rejected.length ? " · 超过单张200脸处理上限" : ""}`}</small><button className="subtle" disabled={busy} onClick={() => { setActive(""); onFilter([photo.docid]); }}>查看照片</button></div>;
+        return <div className="detection-row" key={key}><span>{photoLabel(photo.name).originalName}</span><small>{!indexed ? "尚无可用索引" : !detail ? `已有 ${indices.get(key).length} 张清晰人脸；旧索引未保存排除原因` : detail.totalDetected === 0 ? "未检测到人脸" : `检测到 ${detail.totalDetected} 张脸 · ${detail.accepted} 张参与自动识别 · ${detail.rejected.length} 张保留原因${detail.totalDetected > detail.accepted + detail.rejected.length ? " · 超过单张200脸处理上限" : ""}`}</small><button className="subtle" disabled={busy} onClick={() => { setActive(""); onFilter([photo.docid], photoLabel(photo.name).originalName); }}>查看照片</button></div>;
       })}</details>}
     </>}
   </section>;
