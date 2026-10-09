@@ -5,6 +5,8 @@ import { validatePhoto, todayShanghai } from "./upload";
 import { albumPhotoName } from "./albums.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 
+const MAX_UPLOAD_PHOTOS = 1000;
+
 export default function Uploader({ albums, onOpen, onCreate, onRename, selectedAlbumId }) {
   const [id, setId] = useState("");
   const album = albums.find(a => a.id === id) || albums[0];
@@ -58,7 +60,7 @@ export default function Uploader({ albums, onOpen, onCreate, onRename, selectedA
   function choose(files) {
     setError(""); setResult("");
     const chosen = Array.from(files);
-    if (queue.length + chosen.length > 100) { setError("一次最多选择 100 张照片"); return; }
+    if (queue.length + chosen.length > MAX_UPLOAD_PHOTOS) { setError(`上传队列最多 ${MAX_UPLOAD_PHOTOS} 张照片`); return; }
     const items = [], invalid = [];
     for (const file of chosen) {
       try { validatePhoto(file); items.push({ id: crypto.randomUUID(), file, status: "pending", progress: 0, message: "待上传" }); }
@@ -113,7 +115,7 @@ export default function Uploader({ albums, onOpen, onCreate, onRename, selectedA
       <p className="upload-help">活动和日期会写入照片文件名，跑友可在相册中看到这些标记。勾选下方选项后，上传会同时建立共享人脸索引，计算期间请保持本页打开。</p>
       <label className="finder-strict"><input type="checkbox" checked={buildIndex} disabled={running} onChange={e => setBuildIndex(e.target.checked)} />上传后建立人脸索引</label><p className="upload-help">电脑、手机都可计算；首次需下载约 51 MB 模型和运行文件。手机较慢时可取消勾选，照片上传后再用电脑补建。</p>
       <input ref={fileInput} className="file-picker" type="file" aria-label="选择要上传的照片" accept=".jpg,.jpeg,.png,.webp,.gif" multiple disabled={running} onChange={e => { choose(e.target.files); e.target.value = ""; }} />
-      <button className="upload-dropzone" disabled={running} onClick={() => fileInput.current.click()}><Upload size={32} /><strong>点击选择照片</strong><span>支持多选 · JPG / PNG / WebP / GIF · 每张最多 50 MB</span></button>
+      <button className="upload-dropzone" disabled={running} onClick={() => fileInput.current.click()}><Upload size={32} /><strong>点击选择照片</strong><span>每批最多 {MAX_UPLOAD_PHOTOS} 张 · JPG / PNG / WebP / GIF · 每张最多 50 MB</span></button>
       {queue.length > 0 && <div className="upload-queue"><div className="queue-heading"><span>{queue.length} 张照片 · 已完成 {done} 张</span><button className="subtle" disabled={running} onClick={() => { setQueue(q => q.filter(i => i.status === "done")); setResult(""); }}>清除待上传项</button></div>{queue.map(item => <div key={item.id} className={`queue-row ${item.status}`}><div><strong>{item.file.name}</strong><small>{(item.file.size / 1024 / 1024).toFixed(1)} MB</small><p role={item.status === "error" ? "alert" : undefined}>{item.message}</p>{item.status === "uploading" && <progress value={item.progress} max="100" />}</div><span>{item.status === "done" ? <CheckCircle2 size={20} /> : item.status === "indexing" ? "建立索引中" : item.status === "uploading" ? `${item.progress}%` : <button className="subtle" aria-label={`移除 ${item.file.name}`} disabled={running} onClick={() => setQueue(q => q.filter(i => i.id !== item.id))}><X size={17} /></button>}</span></div>)}</div>}
       <div className="upload-bottom"><button disabled={running || connecting || !queue.some(q => q.status !== "done")} onClick={start}><Upload size={17} />{running ? "上传中…" : done ? "继续上传待处理照片" : "开始上传"}</button>{running && <button className="subtle" onClick={() => operation.current?.abort()}>停止上传</button>}<button className="subtle" disabled={running || connecting} onClick={() => onOpen(album, session, listing, trail)}><ArrowLeft size={17} />查看相册</button></div>
       {result && <p className="upload-result" role="status">{result}</p>}
