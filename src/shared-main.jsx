@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Camera, FolderOpen, ArrowUp, ArrowUpRight, ArrowLeft, Search, CalendarDays, X, Download, Upload, Trash2, RotateCcw } from "lucide-react";
 import { isExpired, parseShare, shareRequest, originalDownload } from "./westlake";
 import PersonFinder from "./PersonFinder";
+import { photoPreviewBlob } from "./photo-preview.js";
 import { photoLabel } from "./upload";
 import Uploader from "./Uploader";
 import AlbumEditor from "./AlbumEditor";
@@ -13,6 +14,18 @@ import "./shared.css";
 
 function Thumb({ file, session, onReady, hidden, selectable, selected, onSelect, selectionDisabled, onRemove, recycled }) {
   const label = photoLabel(file.name);
+  const container = useRef(null);
+  const [requested, setRequested] = useState(false);
+  const [loadingText, setLoadingText] = useState("正在读取照片…");
+  useEffect(() => {
+    if (requested || hidden) return;
+    if (!globalThis.IntersectionObserver) { setRequested(true); return; }
+    const observer = new IntersectionObserver(entries => {
+      if (entries.some(entry => entry.isIntersecting)) { setRequested(true); observer.disconnect(); }
+    }, { rootMargin: "400px" });
+    observer.observe(container.current);
+    return () => observer.disconnect();
+  }, [requested, hidden]);
   const [url, setUrl] = useState("");
   const [error, setError] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -34,17 +47,18 @@ function Thumb({ file, session, onReady, hidden, selectable, selected, onSelect,
     finally { if (!abort.signal.aborted) setDownloading(false); }
   }
   useEffect(() => {
+    if (!requested) return;
     let objectURL;
-    setUrl(""); setError("");
+    setUrl(""); setError(""); setLoadingText("正在读取照片…");
     const abort = new AbortController();
-    shareRequest(session.link, session.password, "thumbnail", { docid: file.docid, rev: file.rev, height: 900, width: 1200, quality: 85 }, abort.signal)
+    photoPreviewBlob(session, file, abort.signal, { onFallback: () => setLoadingText("大图正在排队生成预览…") })
       .then(blob => {
         if (abort.signal.aborted) return;
         objectURL = URL.createObjectURL(blob); setUrl(objectURL); onReady(file.docid, objectURL);
       }).catch(e => { if (!abort.signal.aborted) setError(e.message); });
     return () => { abort.abort(); if (objectURL) URL.revokeObjectURL(objectURL); };
-  }, [file.docid, file.rev, session]);
-  return <div className="photo" hidden={hidden}><div className="photo-image">{selectable && <label className="photo-select"><input type="checkbox" aria-label={`选择照片 ${label.originalName}`} checked={selected} disabled={selectionDisabled} onChange={onSelect} /></label>}{url ? <img src={url} alt={label.originalName} /> : <span>{error || "正在读取照片…"}</span>}</div>{label.date && <div className="photo-label">{label.date}{label.activity && ` · ${label.activity}`}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{onRemove && <div className="photo-manage"><button className={recycled ? "subtle" : "danger-subtle"} disabled={selectionDisabled} aria-label={`${recycled ? "恢复" : "删除"}照片 ${label.originalName}`} onClick={onRemove}>{recycled ? <RotateCcw size={14} /> : <Trash2 size={14} />}{recycled ? "恢复照片" : "删除照片"}</button></div>}{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
+  }, [file.docid, file.rev, session, requested]);
+  return <div ref={container} className="photo" hidden={hidden}><div className="photo-image">{selectable && <label className="photo-select"><input type="checkbox" aria-label={`选择照片 ${label.originalName}`} checked={selected} disabled={selectionDisabled} onChange={onSelect} /></label>}{url ? <img src={url} alt={label.originalName} /> : <span>{error || loadingText}</span>}</div>{label.date && <div className="photo-label">{label.date}{label.activity && ` · ${label.activity}`}</div>}<p title={file.name}>{label.originalName}</p><div className="photo-actions"><span>{(file.size / 1024 / 1024).toFixed(1)} MB · 原图</span><button aria-label={`下载原图 ${file.name}`} disabled={downloading} onClick={download}><Download size={15} />{downloading ? "准备下载…" : "下载原图"}</button></div>{onRemove && <div className="photo-manage"><button className={recycled ? "subtle" : "danger-subtle"} disabled={selectionDisabled} aria-label={`${recycled ? "恢复" : "删除"}照片 ${label.originalName}`} onClick={onRemove}>{recycled ? <RotateCcw size={14} /> : <Trash2 size={14} />}{recycled ? "恢复照片" : "删除照片"}</button></div>}{downloadError && <p className="download-error" role="alert">{downloadError}</p>}</div>;
 }
 
 function BackToTop() {

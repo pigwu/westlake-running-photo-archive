@@ -43,8 +43,8 @@ export async function shareRequest(link, password, method, fields = {}, signal) 
   });
   if (!response.ok) {
     const error = await response.json().catch(() => ({}));
-    const messages = { 401002: "分享密码不正确", 401030: "分享访问次数已用完", 403002: "此目录没有上传权限", 403039: "同名照片已存在，请改名后上传；原文件未覆盖", 403040: "同名文件已存在，且无权操作；请改名后上传", 403041: "同名目录已存在，请改名后上传", 403001: "网盘空间不足，无法上传", 404008: "分享不存在或已到期" };
-    const failure = new Error(messages[error.errcode] || (method.includes("upload") ? `网盘上传失败（${response.status}），请检查分享期限、上传权限或同名文件` : `网盘无法读取（${response.status}），请检查分享期限和预览权限`));
+    const messages = { 401002: "分享密码不正确", 401030: "分享访问次数已用完", 403023: "照片超过网盘在线预览大小限制", 403002: method.includes("upload") ? "此目录没有上传权限" : "此分享没有当前操作权限", 403039: "同名照片已存在，请改名后上传；原文件未覆盖", 403040: "同名文件已存在，且无权操作；请改名后上传", 403041: "同名目录已存在，请改名后上传", 403001: "网盘空间不足，无法上传", 404008: "分享不存在或已到期" };
+    const failure = new Error(messages[error.errcode] || (method.includes("upload") ? `网盘上传失败（${response.status}），请检查分享期限、上传权限或同名文件` : `网盘${method === "thumbnail" ? "缩略图" : method === "osdownload" ? "下载" : "读取"}请求失败（${response.status}），请检查对应分享权限或稍后重试`));
     failure.code = error.errcode;
     throw failure;
   }
