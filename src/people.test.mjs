@@ -36,6 +36,57 @@ test("manual confirmations survive threshold changes and block automatic re-merg
     assert.equal(result.groups[0].faces.length,2); assert.equal(result.groups[1].name,"确认乙");
   }
 });
+
+test("multiple confirmed views match a new face without diluting it by distant confirmed views", () => {
+  const anchors = [face(1,0),face(2,5),face(3,-80)], query=face(4,55);
+  const review={assignments:Object.fromEntries(anchors.map(f=>[f.key,person])),names:{[person]:"多视角人物"}};
+  const input=[...anchors,query], result=buildPeople(input,.35,review);
+  const g=result.groups.find(g=>g.id===person);
+  assert.equal(g.faces.length,4);assert.equal(g.confirmedCount,3);assert.equal(g.suggestedCount,1);
+  assert.equal(g.faces.find(f=>f.key===query.key).suggested,true);
+  assert.equal(result.pending.length,0);
+  assert.deepEqual(membership(result),membership(buildPeople([...input].reverse(),.35,review)));
+  assert.equal(query.suggested,undefined);
+});
+
+test("one confirmed sample needs a strong match while moderate and ambiguous faces stay pending", () => {
+  const a=face(1,0),high=face(2,20),moderate=face(3,55), other=face(4,90),middle=face(5,45), otherId="b".repeat(32);
+  let result=buildPeople([a,high,moderate],.35,{assignments:{[a.key]:person},names:{}});
+  assert.equal(result.groups.find(g=>g.id===person).suggestedCount,1);
+  assert.ok(result.pending.some(f=>f.key===moderate.key));
+  result=buildPeople([a,other,middle],.35,{assignments:{[a.key]:person,[other.key]:otherId},names:{}});
+  assert.ok(result.groups.every(g=>g.suggestedCount===0));
+  assert.match(result.pending.find(f=>f.key===middle.key).reason,/多个人物/);
+});
+
+test("automatically attached faces do not become anchors and cannot cause chain matches", () => {
+  const a=face(1,0),b=face(2,20),near=face(3,60),far=face(4,100);
+  const review={assignments:{[a.key]:person,[b.key]:person},names:{}};
+  const result=buildPeople([a,b,near,far],.35,review),g=result.groups.find(g=>g.id===person);
+  assert.ok(g.faces.some(f=>f.key===near.key));assert.ok(!g.faces.some(f=>f.key===far.key));
+  assert.equal(g.confirmedCount,2);
+  assert.deepEqual(membership(result),membership(buildPeople([far,near,b,a],.35,review)));
+});
+
+test("same-photo profile collisions stay pending and never fall through to another identity", () => {
+  const anchor=face(1,0),query=face(2,2,photo(1),140);
+  let result=buildPeople([anchor,query],.35,{assignments:{[anchor.key]:person},names:{}});
+  assert.equal(result.groups[0].suggestedCount,0);assert.ok(result.pending.some(f=>f.key===query.key));
+  const first=face(2,10,photo(2)),second=face(3,11,photo(2),140);
+  result=buildPeople([anchor,first,second],.35,{assignments:{[anchor.key]:person},names:{}});
+  assert.equal(result.groups[0].suggestedCount,0);assert.equal(result.pending.length,2);
+  const weaker=face(3,40,photo(2),140);
+  result=buildPeople([anchor,first,weaker],.35,{assignments:{[anchor.key]:person},names:{}});
+  assert.equal(result.groups[0].suggestedCount,1);assert.equal(result.pending.length,1);
+  assert.equal(new Set(result.groups[0].photos).size,result.groups[0].faces.length);
+});
+
+test("manual splits, ignored faces and rejected detections are never overridden by profile matching", () => {
+  const a=face(1,0),b=face(2,1),ignored=face(3,2),rejected={...face(4,3),descriptor:undefined,reason:"人脸模糊"},other="b".repeat(32);
+  const result=buildPeople([a,b,ignored,rejected],.35,{assignments:{[a.key]:person,[b.key]:other,[ignored.key]:"ignore"},names:{}});
+  assert.equal(result.groups.length,2);assert.ok(result.groups.every(g=>g.faces.length===1));
+  assert.equal(result.ignored.length,1);assert.equal(result.unrecognized.length,1);
+});
 test("manual same-photo conflicts are exposed rather than silently grouped", () => {
   const p=photo(1), input=[face(1,0,p),face(2,5,p,120)];
   assert.throws(()=>assertNoPhotoConflict(input),/同一张照片/);
