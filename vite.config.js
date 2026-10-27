@@ -11,6 +11,7 @@ export default defineConfig(({ mode }) => ({
     name: "shared-albums-entry",
     transformIndexHtml: { order: "pre", handler: html => html.replace('/src/main.jsx', '/src/shared-main.jsx') },
   }] : [],
+  worker: { format: "es", rollupOptions: { output: { inlineDynamicImports: true } } },
   server: {
     host: "127.0.0.1",
     port: 5173,

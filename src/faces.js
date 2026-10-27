@@ -3,10 +3,11 @@ import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
 import { loadAnalysisImage } from "./image-input.js";
 import { decodeYuNet, planarPixels, similarityTransform, faceQualityReason, blurVariance } from "./sface-utils.js";
 import { FUSION_ENGINE, ARCFACE_SHA256, ARCFACE_BYTES, ARCFACE_CHUNK_BYTES, arcfacePixels, yawProxy, preserveFaceBoxes } from "./fusion-utils.js";
-let runtimePromise, detectorPromise, recognitionPromise;
+let runtimePromise, detectorPromise, recognitionPromise, configuredBase;
+export function configureFaceAssets(base) { configuredBase = base; }
 const yieldUI = () => new Promise(resolve => setTimeout(resolve,0));
 function checkAbort(signal) { if (signal?.aborted) throw new DOMException("分析已停止","AbortError"); }
-function assetUrl(path) { return new URL(import.meta.env.BASE_URL + path, document.baseURI).href; }
+function assetUrl(path) { return new URL(path, configuredBase || new URL(import.meta.env.BASE_URL, document.baseURI)).href; }
 async function runtime() {
   if (!runtimePromise) runtimePromise = import("onnxruntime-web/wasm").then(ort => {
     // One thread works on Pages without COOP/COEP, including mobile Safari.
@@ -62,14 +63,14 @@ export async function prepareFaceAnalysis(options={}) {
 function canvasOf(size) { const c=document.createElement("canvas");c.width=size;c.height=size;return c; }
 function releaseOutputs(outputs) { for(const tensor of Object.values(outputs||{}))tensor.dispose?.(); }
 // Detection can be tested without extracting or comparing identity features.
-export async function detectOriginalFaces(image,{signal,onProgress=()=>{}}={}) {
-  checkAbort(signal);const session=await loadSession("detect",{signal,onProgress}),ort=await runtime();
+export async function detectOriginalFaces(image,{signal,onProgress=()=>{},sessions}={}) {
+  checkAbort(signal);const session=sessions?.detect || await loadSession("detect",{signal,onProgress}),ort=await runtime();
   const width=image.naturalWidth||image.width,height=image.naturalHeight||image.height;
   const tiles=faceTiles(width,height,1200),regions=tiles.length===1?tiles:[{x:0,y:0,width,height},...tiles];
   const canvas=canvasOf(640),ctx=canvas.getContext("2d",{willReadFrequently:true}),boxes=[];
   try {
     for(let i=0;i<regions.length;i++) {
-      checkAbort(signal);onProgress(`原图检测 ${i+1}/${regions.length}`);await yieldUI();checkAbort(signal);
+      checkAbort(signal);onProgress(`原图检测 ${i+1}/${regions.length}`);if(!sessions)await yieldUI();checkAbort(signal);
       const region=regions[i],scale=Math.min(1,640/Math.max(region.width,region.height));
       const drawnW=Math.max(1,Math.round(region.width*scale)),drawnH=Math.max(1,Math.round(region.height*scale));
       ctx.fillStyle="#000";ctx.fillRect(0,0,640,640);ctx.drawImage(image,region.x,region.y,region.width,region.height,0,0,drawnW,drawnH);
@@ -92,10 +93,14 @@ export async function detectOriginalFaces(image,{signal,onProgress=()=>{}}={}) {
 }
 export async function analyzePhoto(photo,options={}) {
   checkAbort(options.signal);const image=await loadAnalysisImage(photo.url,options.signal);
-  try {const detected=await detectOriginalFaces(image,options),boxes=preserveFaceBoxes(options.previousFaces,detected);return await describeDetectedFaces(image,boxes,options);}
+  try {return await analyzeImage(image,options);}
   finally{image.src="";}
 }
-export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{},batchSize=4}={}) {
+export async function analyzeImage(image,options={}) {
+  const detected=await detectOriginalFaces(image,options),boxes=preserveFaceBoxes(options.previousFaces,detected);
+  return describeDetectedFaces(image,boxes,options);
+}
+export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{},batchSize=4,sessions}={}) {
   checkAbort(signal);const faces=[],rejected=[];
   const report=()=>onDiagnostics({version:1,engine:FUSION_ENGINE,totalDetected:boxes.totalDetected||boxes.length,accepted:faces.length,rejected});
   if(!boxes.length){report();return faces;}
@@ -103,12 +108,12 @@ export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{
   const pending=[];
   const flush=async()=>{
     if(!pending.length)return;
-    session ||= await loadSession("recognize",{signal,onProgress});
+    session ||= sessions?.recognize || await loadSession("recognize",{signal,onProgress});
     const descriptors=await recognizeBatch(session,ort,pending.map(p=>p.pixels),{signal,batchSize});
     pending.forEach((p,i)=>faces.push({...p.face,descriptor:descriptors[i]}));pending.length=0;
   };
   for(let i=0;i<boxes.length;i++) {
-    onProgress(`处理人脸 ${i+1}/${boxes.length}`);await yieldUI();checkAbort(signal);
+    onProgress(`处理人脸 ${i+1}/${boxes.length}`);if(!sessions)await yieldUI();checkAbort(signal);
     const box=boxes[i];
     const bounded=boundedFaceCrop(box,width,height),preview=canvasOf(80);
     preview.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,80,80);
@@ -126,4 +131,15 @@ export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{
     }finally{crop.width=0;crop.height=0;if(avatar){avatar.width=0;avatar.height=0;}}
   }
   await flush();checkAbort(signal);report();onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，保留 ${skipped} 张未参与识别的人脸及原因`:""}`);return faces;
+}
+
+// Worker transport uses the same pixel tensors produced by the established
+// HTML image/canvas path. Moving image scaling to OffscreenCanvas changes pixels.
+export async function faceSessionInfo(options={}) {
+  const info={};for(const kind of ["detect","recognize"]){const s=await loadSession(kind,options);info[kind]={inputNames:s.inputNames,outputNames:s.outputNames,inputMetadata:s.inputMetadata};}return info;
+}
+export async function runFaceTensor(kind,data,dims) {
+  const session=await loadSession(kind),ort=await runtime(),input=new ort.Tensor("float32",data,dims);let outputs;
+  try{outputs=await session.run({[session.inputNames[0]]:input});return Object.fromEntries(Object.entries(outputs).map(([name,t])=>[name,{data:t.data.slice(),dims:t.dims}]));}
+  finally{input.dispose?.();releaseOutputs(outputs);}
 }

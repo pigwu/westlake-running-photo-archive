@@ -4,6 +4,25 @@ import {analysisCacheKey,prepareCachedPhoto,finishCachedPhoto,prefetchOne} from 
 import {recognizeBatch} from "./recognition-batch.js";
 import {cacheSimilarities,clearSimilarityCache,cosineSimilarity} from "./sface-utils.js";
 import {buildPeople} from "./people.js";
+import {runConcurrentPhotos,recommendedPhotoConcurrency,normalizePhotoConcurrency} from "./concurrent-photos.js";
+
+test("photo lanes overlap independent jobs, claim each photo once, and remain bounded",async()=>{
+  const completed=[],active=new Set();let peak=0;
+  await runConcurrentPhotos(Array.from({length:13},(_,i)=>i),4,async(value,index,lane)=>{
+    assert.equal(value,index);assert.ok(!active.has(lane));active.add(lane);peak=Math.max(peak,active.size);
+    await new Promise(resolve=>setTimeout(resolve,(index%3)+1));completed.push(index);active.delete(lane);
+  });
+  assert.equal(peak,4);assert.deepEqual(completed.sort((a,b)=>a-b),Array.from({length:13},(_,i)=>i));
+});
+test("stopping a photo batch starts no further jobs and joins active lanes",async()=>{
+  const controller=new AbortController(),started=[],finished=[];
+  await runConcurrentPhotos([0,1,2,3,4],2,async(value)=>{
+    started.push(value);await new Promise(resolve=>setTimeout(resolve,2));controller.abort();finished.push(value);
+  },controller.signal);
+  assert.deepEqual(started,[0,1]);assert.deepEqual(finished,[0,1]);
+  assert.equal(recommendedPhotoConcurrency(24,8),4);assert.equal(recommendedPhotoConcurrency(2,2),1);
+  assert.equal(normalizePhotoConcurrency(128,2),2);
+});
 
 test("resume key isolates photo revisions, share scope and reviewed geometry",()=>{
   const p={docid:'photo',rev:'r'},a={box:[0,0,100,100]},b={box:[100,0,50,50]};
