@@ -20,7 +20,28 @@ export function normalizeDescriptor(values) {
   if (!Number.isFinite(norm) || norm < 1e-8) throw new Error("人脸特征无效，请换一张清晰照片");
   return Array.from(values, value => value / norm);
 }
+let similarityCache;
+// Scoped to the worker's immutable face snapshot. Float64 preserves the exact
+// original dot-product result; no quantization or altered thresholds.
+export function cacheSimilarities(descriptors) {
+  const vectors=[...new Set(descriptors.filter(d=>d?.length))];
+  similarityCache=null;
+  if(vectors.length>1500)return null;
+  const indices=new Map(vectors.map((v,i)=>[v,i])), values=new Float64Array(vectors.length*vectors.length);values.fill(NaN);
+  const stats={hits:0,misses:0};
+  similarityCache={indices,values,n:vectors.length,stats};return stats;
+}
+export function clearSimilarityCache(){similarityCache=null;}
 export function cosineSimilarity(a,b) {
+  const c=similarityCache, i=c?.indices.get(a),j=c?.indices.get(b);
+  if(i!==undefined&&j!==undefined){
+    const k=i*c.n+j;
+    if(!Number.isNaN(c.values[k])){c.stats.hits++;return c.values[k];}
+    const score=computeCosine(a,b);c.values[k]=c.values[j*c.n+i]=score;c.stats.misses++;return score;
+  }
+  return computeCosine(a,b);
+}
+function computeCosine(a,b) {
   if (!a?.length || a.length !== b?.length) return -1;
   let dot=0,normA=0,normB=0;
   for(let i=0;i<a.length;i++){dot+=a[i]*b[i];normA+=a[i]**2;normB+=b[i]**2;}

@@ -4,6 +4,7 @@ import { originalPhotoBlob } from "./westlake.js";
 import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds, needsFaceDetailsUpdate, needsFusionUpgrade } from "./face-cache.js";
 import { indexedFaces } from "./people.js";
 import { loadReviews, saveReview } from "./people-review.js";
+import { prepareCachedPhoto, finishCachedPhoto, prefetchOne } from "./analysis-cache.js";
 import PeoplePanel from "./PeoplePanel.jsx";
 import PeopleWorker from "./people-worker.js?worker&inline";
 import { photoLabel } from "./upload.js";
@@ -35,7 +36,7 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
   const [legacyCount, setLegacyCount] = useState(0);
   const [threshold, setThreshold] = useState(savedThreshold);
   const operation = useRef(null), referenceInput = useRef(null);
-  const legacyKeys = useRef([]);
+  const legacyKeys = useRef([]), groupingWorker = useRef(null), groupingRequest = useRef(0);
   useEffect(() => { setActive(""); }, [resetSelection]);
   const signature = photos.map(faceIndexKey).join("\n");
   const scope = `${session.link}|${album.rootDocid || ""}|${album.albumId || "legacy"}`;
@@ -46,18 +47,30 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
   }, [signature, scope]);
   const faces = useMemo(() => indexedFaces(photos, indices, diagnostics), [indices, diagnostics, signature]);
   useEffect(() => {
-    if (!loaded || busy) return;
-    setGrouping(true); let worker, cancelled = false;
-    const timer = setTimeout(() => {
-      try {
-        worker = new PeopleWorker();
-        worker.onmessage = ({ data }) => { if (cancelled) return; setGrouping(false); if (data.error) { setModel(EMPTY_PEOPLE); setError(data.error); } else setModel(data.result); worker.terminate(); };
-        worker.onerror = () => { if (cancelled) return; setGrouping(false); setModel(EMPTY_PEOPLE); setError("人物分组失败，请刷新后重试"); worker.terminate(); };
-        worker.postMessage({ faces, threshold, review });
-      } catch (e) { setGrouping(false); setModel(EMPTY_PEOPLE); setError(`无法启动人物分组：${e.message}`); }
-    }, 120);
-    return () => { cancelled = true; clearTimeout(timer); worker?.terminate(); };
-  }, [faces, threshold, review, loaded, busy]);
+    if (!loaded) return;
+    let worker;
+    try {
+      worker=new PeopleWorker();groupingWorker.current=worker;
+      worker.onmessage=({data})=>{
+        if(data.requestId!==groupingRequest.current)return;
+        setGrouping(false);
+        if(data.error){setModel(EMPTY_PEOPLE);setError(data.error);}else setModel(data.result);
+      };
+      worker.onerror=()=>{setGrouping(false);setModel(EMPTY_PEOPLE);setError("人物分组失败，请刷新后重试");};
+      // The next effect sends the initial snapshot once. Later threshold and
+      // review changes reuse both the worker and its exact similarity matrix.
+      worker.faceSnapshot=null;
+    }catch(e){setGrouping(false);setError(`无法启动人物分组：${e.message}`);}
+    return ()=>{groupingRequest.current++;worker?.terminate();groupingWorker.current=null;};
+  },[loaded]);
+  useEffect(()=>{
+    const worker=groupingWorker.current;if(!worker||busy)return;
+    const requestId=++groupingRequest.current;setGrouping(true);
+    const timer=setTimeout(()=>{
+      worker.postMessage({requestId,threshold,review,...(worker.faceSnapshot!==faces?{faces}:{})});worker.faceSnapshot=faces;
+    },120);
+    return ()=>{clearTimeout(timer);groupingRequest.current++;};
+  },[faces,threshold,review,loaded,busy]);
   useEffect(() => {
     if (!active.startsWith("reference-")) return;
     const face = references[Number(active.slice("reference-".length))];
@@ -100,38 +113,37 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
     const nextDetails = new Map(diagnostics);
     let failed = 0, lastFailure = "", saved = 0;
     try {
-      const { analyzePhoto, prepareFaceAnalysis } = await import("./faces.js");
-      // A shared model failure should stop the batch before any original
-      // downloads, rather than reporting the same error for all 14 photos.
-      await prepareFaceAnalysis({ signal: abort.signal, onProgress: setStatus });
       const missing = photos.filter(p => {
         const key = faceIndexKey(p);
         return !next.has(key) || (mode === "fusion" && needsFusionUpgrade(next.get(key),nextDetails.get(key))) || (mode === "details" && needsFaceDetailsUpdate(nextDetails.get(key)));
       });
-      for (let i = 0; i < missing.length; i++) {
-        if (abort.signal.aborted) break;
-        const progress = message => { if (!abort.signal.aborted) setStatus(`照片 ${i + 1}/${missing.length} · ${message}`); };
-        let url;
+      const previousFor = photo => preserveReviewPositions(photo, review.assignments, [...(next.get(faceIndexKey(photo))||[]), ...(nextDetails.get(faceIndexKey(photo))?.rejected||[])]);
+      let models;
+      const prepare = photo => prepareCachedPhoto(photo, {scope:session.link, previousFaces:previousFor(photo), signal:abort.signal, loadBlob:async()=>{
+        // Cache-only resumes never load models. A failed shared model setup is
+        // reused as a rejection rather than downloading it again per photo.
+        models ||= import("./faces.js").then(({prepareFaceAnalysis})=>prepareFaceAnalysis({signal:abort.signal,onProgress:message=>{if(!abort.signal.aborted)setStatus(message);}}));
+        await models;
+        return originalPhotoBlob(session,photo,abort.signal);
+      }});
+      for await (const item of prefetchOne(missing, prepare, abort.signal)) {
+        const photo=item.item;
+        const progress = message => { if (!abort.signal.aborted) setStatus(`照片 ${item.index + 1}/${missing.length} · ${message}`); };
         try {
-          progress("读取原图…");
-          const blob = await originalPhotoBlob(session, missing[i], abort.signal);
-          if (abort.signal.aborted) break;
-          url = URL.createObjectURL(blob);
-          let detail;
-          const prior=preserveReviewPositions(missing[i],review.assignments,[...(next.get(faceIndexKey(missing[i]))||[]),...(nextDetails.get(faceIndexKey(missing[i]))?.rejected||[])]);
-          const faces = await analyzePhoto({ url }, { signal: abort.signal, previousFaces:prior, onProgress: progress, onDiagnostics: data => { detail = data; } });
+          if(item.error)throw item.error;
+          const {faces,diagnostics:detail} = await finishCachedPhoto(item.value, {signal:abort.signal,previousFaces:previousFor(photo),onProgress:progress});
           progress("保存共享人脸索引…");
-          await saveFaceIndex(session, rootDocid, missing[i], faces, { signal: abort.signal, diagnostics: detail });
-          next.set(faceIndexKey(missing[i]), faces); if (detail) nextDetails.set(faceIndexKey(missing[i]), detail); saved++; setIndices(new Map(next)); setDiagnostics(new Map(nextDetails));
-        } catch (e) { if (abort.signal.aborted) break; failed++; lastFailure = e.message; }
-        finally { if (url) URL.revokeObjectURL(url); }
+          await saveFaceIndex(session, rootDocid, photo, faces, {signal:abort.signal,diagnostics:detail});
+          next.set(faceIndexKey(photo), faces); if(detail)nextDetails.set(faceIndexKey(photo), detail);
+          saved++;setIndices(new Map(next));setDiagnostics(new Map(nextDetails));
+        } catch(e) {if(abort.signal.aborted)break;failed++;lastFailure=e.message;}
       }
       if (operation.current !== abort) return;
       setLegacyCount(legacyKeys.current.filter(key => !next.has(key)).length);
       setLoaded(true); setStatus(`${abort.signal.aborted ? "已停止。" : failed && !saved ? "补建失败。" : "补建完成。"}已保存 ${saved} 张照片的人脸索引。${saved ? "其他跑友可直接使用。" : ""}`);
       if (failed) setError(`${failed} 张索引建立失败：${lastFailure}`);
     } catch (e) {
-      if (!abort.signal.aborted) { setStatus("未开始补建，请刷新页面后重试。"); setError(`人脸模型加载失败：${e.message}`); }
+      if (!abort.signal.aborted) { setStatus("未开始补建，请刷新页面后重试。"); setError(`索引建立失败：${e.message}`); }
       else if (operation.current === abort) setStatus("已停止。");
     }
     finally { if (operation.current === abort) setBusy(false); }

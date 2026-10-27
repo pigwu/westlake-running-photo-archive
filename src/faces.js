@@ -1,6 +1,7 @@
+import { recognizeBatch } from "./recognition-batch.js";
 import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
 import { loadAnalysisImage } from "./image-input.js";
-import { decodeYuNet, planarPixels, similarityTransform, normalizeDescriptor, faceQualityReason, blurVariance } from "./sface-utils.js";
+import { decodeYuNet, planarPixels, similarityTransform, faceQualityReason, blurVariance } from "./sface-utils.js";
 import { FUSION_ENGINE, ARCFACE_SHA256, ARCFACE_BYTES, ARCFACE_CHUNK_BYTES, arcfacePixels, yawProxy, preserveFaceBoxes } from "./fusion-utils.js";
 let runtimePromise, detectorPromise, recognitionPromise;
 const yieldUI = () => new Promise(resolve => setTimeout(resolve,0));
@@ -94,11 +95,18 @@ export async function analyzePhoto(photo,options={}) {
   try {const detected=await detectOriginalFaces(image,options),boxes=preserveFaceBoxes(options.previousFaces,detected);return await describeDetectedFaces(image,boxes,options);}
   finally{image.src="";}
 }
-export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{}}={}) {
+export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{},batchSize=4}={}) {
   checkAbort(signal);const faces=[],rejected=[];
   const report=()=>onDiagnostics({version:1,engine:FUSION_ENGINE,totalDetected:boxes.totalDetected||boxes.length,accepted:faces.length,rejected});
   if(!boxes.length){report();return faces;}
   const width=image.naturalWidth||image.width,height=image.naturalHeight||image.height,ort=await runtime();let session,skipped=0;
+  const pending=[];
+  const flush=async()=>{
+    if(!pending.length)return;
+    session ||= await loadSession("recognize",{signal,onProgress});
+    const descriptors=await recognizeBatch(session,ort,pending.map(p=>p.pixels),{signal,batchSize});
+    pending.forEach((p,i)=>faces.push({...p.face,descriptor:descriptors[i]}));pending.length=0;
+  };
   for(let i=0;i<boxes.length;i++) {
     onProgress(`处理人脸 ${i+1}/${boxes.length}`);await yieldUI();checkAbort(signal);
     const box=boxes[i];
@@ -107,18 +115,15 @@ export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{
     const previewUrl=preview.toDataURL("image/jpeg",.65);preview.width=0;preview.height=0;
     const reject=reason=>{skipped++;rejected.push({box:[box.x,box.y,box.width,box.height],avatar:previewUrl,reason});};
     const reason=box.migrationReason||faceQualityReason(box);if(reason){reject(reason);continue;}
-    const crop=canvasOf(112),ctx=crop.getContext("2d",{willReadFrequently:true});let input,outputs,avatar;
+    const crop=canvasOf(112),ctx=crop.getContext("2d",{willReadFrequently:true});let avatar;
     try {
       ctx.setTransform(...similarityTransform(box.landmarks));ctx.drawImage(image,0,0);ctx.resetTransform();
       const pixels=ctx.getImageData(0,0,112,112).data,reason=faceQualityReason(box,pixels);if(reason){reject(reason);continue;}
-      session ||= await loadSession("recognize",{signal,onProgress});checkAbort(signal);
-      input=new ort.Tensor("float32",arcfacePixels(pixels),[1,3,112,112]);
-      outputs=await session.run({[session.inputNames[0]]:input});checkAbort(signal);
-      const descriptor=normalizeDescriptor(outputs[session.outputNames[0]].data);if(descriptor.length!==512)throw new Error("人脸特征维度不兼容");
       avatar=canvasOf(120);
       avatar.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,120,120);
-      faces.push({descriptor,box:[box.x,box.y,box.width,box.height],avatar:avatar.toDataURL("image/jpeg",.75),engine:FUSION_ENGINE,landmarks:box.landmarks,yawProxy:yawProxy(box.landmarks),detectorScore:box.score,sharpness:blurVariance(pixels,112,112)});
-    }finally{input?.dispose?.();releaseOutputs(outputs);crop.width=0;crop.height=0;if(avatar){avatar.width=0;avatar.height=0;}}
+      pending.push({pixels:arcfacePixels(pixels),face:{box:[box.x,box.y,box.width,box.height],avatar:avatar.toDataURL("image/jpeg",.75),engine:FUSION_ENGINE,landmarks:box.landmarks,yawProxy:yawProxy(box.landmarks),detectorScore:box.score,sharpness:blurVariance(pixels,112,112)}});
+      if(pending.length>=Math.max(1,Math.min(4,batchSize)))await flush();
+    }finally{crop.width=0;crop.height=0;if(avatar){avatar.width=0;avatar.height=0;}}
   }
-  report();onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，保留 ${skipped} 张未参与识别的人脸及原因`:""}`);return faces;
+  await flush();checkAbort(signal);report();onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，保留 ${skipped} 张未参与识别的人脸及原因`:""}`);return faces;
 }
