@@ -1,4 +1,5 @@
 import { cosineSimilarity, GROUP_PAIR_FLOOR, normalizeMatchThreshold } from "./sface-utils.js";
+import { buildFusionPeople, fusionEvidence } from "./fusion-people.js";
 
 // Geometry, original revision and file ID identify a detection across reloads.
 // Array position is deliberately not used for real indexed detections.
@@ -34,52 +35,10 @@ class MaxHeap {
 function group(id, faces, manual, names) {
   return { id, faces, manual, confirmedCount: manual ? faces.length : 0, suggestedCount: 0, name: names[id] || "", photos: [...new Set(faces.map(f => f.photoId))], avatar: faces[0]?.avatar };
 }
-const PROFILE_MARGIN = .08;
-function profileEvidence(face, samples) {
-  if (!face.descriptor) return null;
-  const scores = samples.filter(f => f.descriptor).map(f => cosineSimilarity(face.descriptor, f.descriptor)).sort((a, b) => b - a);
-  if (!scores.length) return null;
-  const peak = scores[0], second = scores[1] ?? -1, support = scores.length > 1 ? (peak + second) / 2 : peak;
-  return { peak, second, support, mean: scores.reduce((a, b) => a + b, 0) / scores.length, score: .75 * peak + .25 * support };
-}
-// Only user-confirmed samples are anchors. Fresh automatic matches never
-// become training samples, preventing a chain of matches from drifting.
-function attachToConfirmed(automatic, groups, threshold) {
-  const profiles = groups.filter(g => g.manual && g.faces.some(f => f.descriptor)).map(g => ({ group: g, samples: [...g.faces] }));
-  const remaining = [], pending = [], proposals = [];
-  const hold = (face, reason) => pending.push({ ...face, reason, groupId: `review:${face.key}`, groupName: "待确认归属" });
-  for (const face of automatic) {
-    const ranked = profiles.map(p => ({ ...p, ...profileEvidence(face, p.samples) })).sort((a, b) => b.score - a.score || a.group.id.localeCompare(b.group.id));
-    const best = ranked[0];
-    if (!best || best.peak < Math.max(GROUP_PAIR_FLOOR, threshold - .05)) { remaining.push(face); continue; }
-    const high = (best.second >= threshold && best.support >= Math.max(threshold, .50)) || best.peak >= Math.max(threshold + .15, .70);
-    const margin = ranked[1] ? best.score - ranked[1].score : 1;
-    if (best.group.photos.includes(face.photoId)) { hold(face, "候选人物已出现在同一张照片中，请人工确认。"); continue; }
-    if (!high) { hold(face, "与已确认人物有相似之处，但分数不足以自动归入。"); continue; }
-    if (margin < PROFILE_MARGIN) { hold(face, "与多个人物的匹配分数接近，请确认归属。"); continue; }
-    proposals.push({ face, target: best.group, score: best.score, margin });
-  }
-  // Resolve simultaneous claims for one person in one photo before assigning.
-  const claims = new Map();
-  for (const p of proposals) {
-    const key = JSON.stringify([p.target.id, p.face.photoId]);
-    if (!claims.has(key)) claims.set(key, []);
-    claims.get(key).push(p);
-  }
-  for (const candidates of claims.values()) {
-    candidates.sort((a, b) => b.score - a.score || a.face.key.localeCompare(b.face.key));
-    const ambiguous = candidates.length > 1 && candidates[0].score - candidates[1].score < PROFILE_MARGIN;
-    candidates.forEach((p, i) => {
-      if (ambiguous || i > 0) { hold(p.face, "同一照片的多张脸匹配到这个人物，请人工确认。"); return; }
-      p.target.faces.push({ ...p.face, suggested: true, matchScore: p.score });
-      p.target.photos.push(p.face.photoId); p.target.suggestedCount++;
-    });
-  }
-  return { remaining, pending };
-}
 export function candidateGroups(face, groups, excludeId) {
   return groups.filter(g => g.id !== excludeId && !g.photos.includes(face.photoId)).map(g => {
-    const evidence = profileEvidence(face, g.faces.filter(f => !g.manual || !f.suggested));
+    const samples = g.faces.filter(f => !f.suggested);
+    const evidence = fusionEvidence(face, samples);
     return evidence && { id: g.id, name: g.name, avatar: g.avatar, ...evidence };
   }).filter(c => c && c.peak >= GROUP_PAIR_FLOOR).sort((a, b) => b.score - a.score || a.id.localeCompare(b.id)).slice(0, 3);
 }
@@ -89,6 +48,9 @@ export function assertNoPhotoConflict(faces) {
 // Global average-link agglomeration. Every merge updates all cluster pairs;
 // sorted detection keys and explicit tie-breaking remove input-order effects.
 export function buildPeople(input, threshold, review = { assignments: {}, names: {} }) {
+  return buildFusionPeople(input, threshold, review);
+}
+export function buildSeedPeople(input, threshold, review = { assignments: {}, names: {} }) {
   threshold = normalizeMatchThreshold(threshold);
   const faces = [...input].sort((a, b) => a.key.localeCompare(b.key));
   const assignments = review.assignments || {}, names = review.names || {};
@@ -108,8 +70,7 @@ export function buildPeople(input, threshold, review = { assignments: {}, names:
     if (valid.length) groups.push(group(id, valid, true, names));
   }
   if (automatic.length > 1500) throw new Error("这个相册超过 1500 张待自动分组的人脸，请先按活动拆分相册后再分组。");
-  const matched = attachToConfirmed(automatic, groups, threshold);
-  automatic.splice(0, automatic.length, ...matched.remaining);
+
   const n = automatic.length;
   const means = new Float64Array(n * n), floors = new Float64Array(n * n);
   const clusters = automatic.map((face, i) => ({ i, faces: [face], photos: new Set([face.photoId]), version: 0, alive: true }));
@@ -144,7 +105,7 @@ export function buildPeople(input, threshold, review = { assignments: {}, names:
   }
   groups.sort((a, b) => Number(b.manual) - Number(a.manual) || b.faces.length - a.faces.length || a.id.localeCompare(b.id));
   groups.forEach((g, i) => { g.name ||= `${g.manual ? "已确认人物" : "人物"} ${i + 1}`; });
-  const pending = [...matched.pending, ...groups.filter(g => !g.manual && g.faces.length === 1).map(g => ({ ...g.faces[0], groupId: g.id, groupName: g.name }))]
+  const pending = [...groups.filter(g => !g.manual && g.faces.length === 1).map(g => ({ ...g.faces[0], groupId: g.id, groupName: g.name }))]
     .sort((a, b) => a.key.localeCompare(b.key)).map(f => ({ ...f, candidates: candidateGroups(f, groups, f.groupId) }));
   return { groups, pending, ignored, unrecognized, conflicts };
 }

@@ -1,3 +1,5 @@
+> 当前网盘网站最终方案使用多角度融合识别与 v4 索引，运行与发布说明见 [GITHUB_PAGES.md](GITHUB_PAGES.md)。下文另含早期独立服务器工具的说明。
+
 # 拾光 · 跑团照片档案
 
 **GitHub Pages + 学校网盘版本已经可用：** 按 [GitHub 发布操作说明](GITHUB_PAGES.md) 发布，无需自建服务器。网页按日期和活动组织相册，访问者输入分享密码后直接读取网盘照片、下载原图，支持本机人脸分组。上传者通过 `#/upload` 页面选择照片、填写活动和日期，直接上传至学校网盘。运行 `npm run build:pages` 构建此版本。下文说明保留的服务器版本。
@@ -83,7 +85,7 @@ npm start
 | `GET /api/people`               | 成员分组与照片数量                                                                          |
 | `PATCH /api/people/:id`         | `{ "name": "成员名" }`                                                                      |
 | `POST /api/people/merge`        | `{ "from": "分组ID", "to": "分组ID" }`                                                      |
-| `POST /api/faces`               | 保存浏览器生成的 128 维描述向量、人脸框及头像                                               |
+| `POST /api/faces`               | 保存浏览器生成的 512 维 ArcFace 描述向量、人脸框及头像                                               |
 
 所有修改类 API 都要求管理员权限。未创建用户账号体系；口令角色是整个跑团的共享权限。
 

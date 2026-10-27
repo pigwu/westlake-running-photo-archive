@@ -601,7 +601,7 @@ app.post("/api/faces", (req, res) => {
     faces.some(
       (f) =>
         !Array.isArray(f.descriptor) ||
-        f.descriptor.length !== 128 ||
+        f.descriptor.length !== 512 ||
         !f.descriptor.every(
           (v) =>
             typeof v === "number" && Number.isFinite(v) && Math.abs(v) < 10,
@@ -622,7 +622,9 @@ app.post("/api/faces", (req, res) => {
       let best = null,
         distance = 0.48;
       for (const person of people) {
-        const d = faceDistance(face.descriptor, JSON.parse(person.descriptor));
+        const prior = JSON.parse(person.descriptor);
+        if (prior.length !== 512) continue;
+        const d = 1 - face.descriptor.reduce((sum, v, i) => sum + v * prior[i], 0);
         if (d < distance) {
           distance = d;
           best = person;

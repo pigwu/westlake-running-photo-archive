@@ -1,31 +1,32 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildPeople, faceKey, indexedFaces, assertNoPhotoConflict } from "./people.js";
+import { buildPeople, buildSeedPeople, faceKey, indexedFaces, assertNoPhotoConflict } from "./people.js";
 import { resolveReviews, validateReview, saveReview, loadReviews } from "./people-review.js";
 import { faceIndexKey, referencePhotoIds, saveFaceIndex, loadFaceIndices, validateDiagnostics } from "./face-cache.js";
-import { FACE_ENGINE } from "./sface-utils.js";
+import { ALIGN_POINTS } from "./sface-utils.js";
+import { FUSION_ENGINE as FACE_ENGINE } from "./fusion-utils.js";
 const root = `gns://${"A".repeat(32)}`, person = "a".repeat(32), avatar = "data:image/jpeg;base64,YQ==";
 const photo = n => ({ docid: `${root}/${String(n).padStart(32,"0")}`, rev: "B".repeat(32), name: `synthetic-${n}.jpg` });
 function face(n, degrees, p = photo(n), x = 0) {
-  const theta = degrees * Math.PI / 180, value = { descriptor: [Math.cos(theta), Math.sin(theta), ...Array(126).fill(0)], box: [x,0,100,100], avatar };
+  const theta = degrees * Math.PI / 180, value = { descriptor: [Math.cos(theta), Math.sin(theta), ...Array(510).fill(0)], box: [x,0,100,100], avatar,landmarks:ALIGN_POINTS,yawProxy:0,detectorScore:.95,sharpness:100 };
   return { ...value, key: faceKey(p,value), photoId: p.docid, photoName:p.name };
 }
 const membership = result => result.groups.map(g => g.faces.map(f => f.key).sort()).sort((a,b) => a[0].localeCompare(b[0]));
 test("global average-link merges groups and is invariant to all orders of the known counterexample", () => {
   const input = [face(1,0),face(2,70),face(3,35)];
   const permutations = [[0,1,2],[0,2,1],[1,0,2],[1,2,0],[2,0,1],[2,1,0]];
-  const expected = membership(buildPeople(input,.5));
+  const expected = membership(buildSeedPeople(input,.5));
   assert.equal(expected.length,1);
-  for (const order of permutations) assert.deepEqual(membership(buildPeople(order.map(i=>input[i]),.5)),expected);
+  for (const order of permutations) assert.deepEqual(membership(buildSeedPeople(order.map(i=>input[i]),.5)),expected);
 });
 test("global grouping respects same-photo and pairwise floor constraints after multiple merges", () => {
   const p = photo(1), input = [face(1,0,p),face(2,1,p,120),face(3,5),face(4,60),face(5,100)];
-  const result = buildPeople(input,.1);
+  const result = buildSeedPeople(input,.1);
   for (const g of result.groups) {
     assert.equal(new Set(g.faces.map(f=>f.photoId)).size,g.faces.length);
     for (const a of g.faces) for(const b of g.faces) assert.ok(a.descriptor.reduce((s,v,i)=>s+v*b.descriptor[i],0)>=.1-1e-10);
   }
-  assert.deepEqual(membership(result),membership(buildPeople([...input].reverse(),.1)));
+  assert.deepEqual(membership(result),membership(buildSeedPeople([...input].reverse(),.1)));
 });
 test("manual confirmations survive threshold changes and block automatic re-merging after splits", () => {
   const input=[face(1,0),face(2,5),face(3,10)], other="b".repeat(32);
@@ -50,7 +51,7 @@ test("multiple confirmed views match a new face without diluting it by distant c
 });
 
 test("one confirmed sample needs a strong match while moderate and ambiguous faces stay pending", () => {
-  const a=face(1,0),high=face(2,20),moderate=face(3,55), other=face(4,90),middle=face(5,45), otherId="b".repeat(32);
+  const a=face(1,0),high={...face(2,20),yawProxy:1.2},moderate={...face(3,55),yawProxy:1.2}, other=face(4,90),middle=face(5,45), otherId="b".repeat(32);
   let result=buildPeople([a,high,moderate],.35,{assignments:{[a.key]:person},names:{}});
   assert.equal(result.groups.find(g=>g.id===person).suggestedCount,1);
   assert.ok(result.pending.some(f=>f.key===moderate.key));
@@ -60,7 +61,7 @@ test("one confirmed sample needs a strong match while moderate and ambiguous fac
 });
 
 test("automatically attached faces do not become anchors and cannot cause chain matches", () => {
-  const a=face(1,0),b=face(2,20),near=face(3,60),far=face(4,100);
+  const a=face(1,0),b=face(2,20),near={...face(3,60),yawProxy:1.2},far={...face(4,100),yawProxy:1.2};
   const review={assignments:{[a.key]:person,[b.key]:person},names:{}};
   const result=buildPeople([a,b,near,far],.35,review),g=result.groups.find(g=>g.id===person);
   assert.ok(g.faces.some(f=>f.key===near.key));assert.ok(!g.faces.some(f=>f.key===far.key));
@@ -152,7 +153,7 @@ test("ignored detections are excluded from reference search",()=>{
   const p=photo(1),f=face(1,0,p),indices=new Map([[faceIndexKey(p),[f]]]);
   assert.deepEqual(referencePhotoIds([f],indices,[p],.23,new Set([f.key])),[]);
 });
-test("new diagnostics round-trip while old v3 feature indices remain compatible",async t=>{
+test("fusion diagnostics round-trip and empty diagnostics can be supplemented",async t=>{
   const p=photo(1),f=face(1,0,p),session={link:"share"};let saved,stored;
   const detail={version:1,totalDetected:2,accepted:1,rejected:[{box:[120,0,20,20],avatar,reason:"人脸太小"}]};
   t.mock.method(globalThis,"fetch",async(url,options)=>{

@@ -239,7 +239,7 @@ test("照片 API：访问控制、上传、去重、标签、回收恢复、扫�
   );
   assert.equal(p2.date, "2026-10-07");
   assert.equal(p2.eventTitle, "环湖测试");
-  const face = (v) => ({ descriptor: Array(128).fill(v), box: [0, 0, 20, 20] });
+  const face = (v) => ({ descriptor: [Math.cos(v * 16), Math.sin(v * 16), ...Array(510).fill(0)], box: [0, 0, 20, 20] });
   assert.equal(
     (
       await request("/faces", "POST", {

@@ -1,6 +1,7 @@
 import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
 import { loadAnalysisImage } from "./image-input.js";
-import { decodeYuNet, planarPixels, similarityTransform, normalizeDescriptor, faceQualityReason } from "./sface-utils.js";
+import { decodeYuNet, planarPixels, similarityTransform, normalizeDescriptor, faceQualityReason, blurVariance } from "./sface-utils.js";
+import { FUSION_ENGINE, ARCFACE_SHA256, ARCFACE_BYTES, ARCFACE_CHUNK_BYTES, arcfacePixels, yawProxy, preserveFaceBoxes } from "./fusion-utils.js";
 let runtimePromise, detectorPromise, recognitionPromise;
 const yieldUI = () => new Promise(resolve => setTimeout(resolve,0));
 function checkAbort(signal) { if (signal?.aborted) throw new DOMException("分析已停止","AbortError"); }
@@ -26,14 +27,29 @@ async function modelBytes(name, signal, onProgress) {
   try { await cache?.put(url,copy); } catch {}
   return bytes;
 }
+async function arcfaceBytes(signal,onProgress) {
+  const bytes=new Uint8Array(ARCFACE_BYTES);let cache;
+  try {cache=await caches.open("running-arcface-r50-v1");} catch {}
+  for(let i=0;i<4;i++){
+    checkAbort(signal);onProgress(`首次准备融合模型 ${i+1}/4（共约 174 MB，可缓存复用）…`);
+    const url=assetUrl(`models/arcface-v1/w600k_r50.part${i}.bin`);
+    let response;try{response=await cache?.match(url);}catch{}
+    if(!response){response=await fetch(url,{signal,credentials:"omit"});if(!response.ok)throw new Error(`融合模型下载失败（${response.status}），请检查网络或稍后用电脑重试`);try{await cache?.put(url,response.clone());}catch{}}
+    const part=new Uint8Array(await response.arrayBuffer());checkAbort(signal);
+    if(part.length!==Math.min(ARCFACE_CHUNK_BYTES,ARCFACE_BYTES-i*ARCFACE_CHUNK_BYTES)){try{await cache?.delete(url);}catch{}throw new Error("融合模型分片不完整，请重试");}
+    bytes.set(part,i*ARCFACE_CHUNK_BYTES);
+  }
+  const hash=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",bytes)),b=>b.toString(16).padStart(2,"0")).join("");
+  if(hash!==ARCFACE_SHA256){try{await caches.delete("running-arcface-r50-v1");}catch{}throw new Error("融合模型校验失败，请重新下载");}
+  checkAbort(signal);return bytes;
+}
 async function loadSession(kind,{signal,onProgress=()=>{}}={}) {
   checkAbort(signal); const existing=kind === "detect" ? detectorPromise : recognitionPromise;
   if(existing) { const session=await existing; checkAbort(signal); return session; }
   const pending=(async()=>{
     const ort=await runtime();checkAbort(signal);
-    const name=kind === "detect" ? "face_detection_yunet_2026may.onnx" : "face_recognition_sface_2021dec.onnx";
-    const bytes=await modelBytes(name,signal,onProgress);checkAbort(signal);
-    onProgress(kind === "detect" ? "准备 YuNet 人脸检测…" : "准备 SFace 人脸特征…");
+    const bytes=kind==="detect"?await modelBytes("face_detection_yunet_2026may.onnx",signal,onProgress):await arcfaceBytes(signal,onProgress);checkAbort(signal);
+    onProgress(kind === "detect" ? "准备 YuNet 人脸检测…" : "准备 ArcFace 多角度人脸特征…");
     return ort.InferenceSession.create(bytes,{executionProviders:["wasm"],graphOptimizationLevel:"all"});
   })().catch(e=>{if(kind === "detect")detectorPromise=null;else recognitionPromise=null;throw e;});
   if(kind === "detect")detectorPromise=pending;else recognitionPromise=pending;
@@ -56,7 +72,7 @@ export async function detectOriginalFaces(image,{signal,onProgress=()=>{}}={}) {
       const region=regions[i],scale=Math.min(1,640/Math.max(region.width,region.height));
       const drawnW=Math.max(1,Math.round(region.width*scale)),drawnH=Math.max(1,Math.round(region.height*scale));
       ctx.fillStyle="#000";ctx.fillRect(0,0,640,640);ctx.drawImage(image,region.x,region.y,region.width,region.height,0,0,drawnW,drawnH);
-      // OpenCV: YuNet raw BGR 0..255; SFace raw RGB 0..255.
+      // YuNet expects raw BGR values; ArcFace normalization is separate.
       const input=new ort.Tensor("float32",planarPixels(ctx.getImageData(0,0,640,640).data,640,640,"BGR"),[1,3,640,640]);let outputs;
       try {
         outputs=await session.run({[session.inputNames[0]]:input});checkAbort(signal);
@@ -75,12 +91,12 @@ export async function detectOriginalFaces(image,{signal,onProgress=()=>{}}={}) {
 }
 export async function analyzePhoto(photo,options={}) {
   checkAbort(options.signal);const image=await loadAnalysisImage(photo.url,options.signal);
-  try {const boxes=await detectOriginalFaces(image,options);return await describeDetectedFaces(image,boxes,options);}
+  try {const detected=await detectOriginalFaces(image,options),boxes=preserveFaceBoxes(options.previousFaces,detected);return await describeDetectedFaces(image,boxes,options);}
   finally{image.src="";}
 }
 export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{},onDiagnostics=()=>{}}={}) {
   checkAbort(signal);const faces=[],rejected=[];
-  const report=()=>onDiagnostics({version:1,totalDetected:boxes.totalDetected||boxes.length,accepted:faces.length,rejected});
+  const report=()=>onDiagnostics({version:1,engine:FUSION_ENGINE,totalDetected:boxes.totalDetected||boxes.length,accepted:faces.length,rejected});
   if(!boxes.length){report();return faces;}
   const width=image.naturalWidth||image.width,height=image.naturalHeight||image.height,ort=await runtime();let session,skipped=0;
   for(let i=0;i<boxes.length;i++) {
@@ -90,18 +106,18 @@ export async function describeDetectedFaces(image,boxes,{signal,onProgress=()=>{
     preview.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,80,80);
     const previewUrl=preview.toDataURL("image/jpeg",.65);preview.width=0;preview.height=0;
     const reject=reason=>{skipped++;rejected.push({box:[box.x,box.y,box.width,box.height],avatar:previewUrl,reason});};
-    const reason=faceQualityReason(box);if(reason){reject(reason);continue;}
+    const reason=box.migrationReason||faceQualityReason(box);if(reason){reject(reason);continue;}
     const crop=canvasOf(112),ctx=crop.getContext("2d",{willReadFrequently:true});let input,outputs,avatar;
     try {
       ctx.setTransform(...similarityTransform(box.landmarks));ctx.drawImage(image,0,0);ctx.resetTransform();
       const pixels=ctx.getImageData(0,0,112,112).data,reason=faceQualityReason(box,pixels);if(reason){reject(reason);continue;}
       session ||= await loadSession("recognize",{signal,onProgress});checkAbort(signal);
-      input=new ort.Tensor("float32",planarPixels(pixels,112,112,"RGB"),[1,3,112,112]);
+      input=new ort.Tensor("float32",arcfacePixels(pixels),[1,3,112,112]);
       outputs=await session.run({[session.inputNames[0]]:input});checkAbort(signal);
-      const descriptor=normalizeDescriptor(outputs[session.outputNames[0]].data);if(descriptor.length!==128)throw new Error("SFace 特征维度不兼容");
+      const descriptor=normalizeDescriptor(outputs[session.outputNames[0]].data);if(descriptor.length!==512)throw new Error("人脸特征维度不兼容");
       avatar=canvasOf(120);
       avatar.getContext("2d").drawImage(image,bounded.x,bounded.y,bounded.width,bounded.height,0,0,120,120);
-      faces.push({descriptor,box:[box.x,box.y,box.width,box.height],avatar:avatar.toDataURL("image/jpeg",.75)});
+      faces.push({descriptor,box:[box.x,box.y,box.width,box.height],avatar:avatar.toDataURL("image/jpeg",.75),engine:FUSION_ENGINE,landmarks:box.landmarks,yawProxy:yawProxy(box.landmarks),detectorScore:box.score,sharpness:blurVariance(pixels,112,112)});
     }finally{input?.dispose?.();releaseOutputs(outputs);crop.width=0;crop.height=0;if(avatar){avatar.width=0;avatar.height=0;}}
   }
   report();onProgress(`已提取 ${faces.length} 张清晰人脸${skipped?`，保留 ${skipped} 张未参与识别的人脸及原因`:""}`);return faces;

@@ -6,3 +6,4 @@ data/
 *.log
 tmp/
 public/runtime/
+public/models/arcface-v1/*.bin

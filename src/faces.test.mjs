@@ -1,13 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { faceTiles, deduplicateFaces, boundedFaceCrop } from "./face-utils.js";
-import { buildPeople } from "./people.js";
+import { buildSeedPeople as buildPeople } from "./people.js";
 import { analyzePhoto, detectOriginalFaces, describeDetectedFaces, prepareFaceAnalysis } from "./faces.js";
 import { faceIndexKey, validateFaceIndex, referencePhotoIds, saveFaceIndex, loadFaceIndices, needsFaceDetailsUpdate } from "./face-cache.js";
 import { originalPhotoBlob } from "./westlake.js";
 import { uploadPhotoWithIndex } from "./upload-index.js";
 import { normalizeImageBlob, loadAnalysisImage } from "./image-input.js";
-import { FACE_ENGINE, ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold, restoreMatchThreshold } from "./sface-utils.js";
+import { ALIGN_POINTS, planarPixels, similarityTransform, decodeYuNet, faceQualityReason, normalizeDescriptor, normalizeMatchThreshold, restoreMatchThreshold } from "./sface-utils.js";
+import { FUSION_ENGINE as FACE_ENGINE } from "./fusion-utils.js";
 
 // Feed the complete synthetic set through the production global grouper.
 function groupDetectedFaces(groups, faces, photoId, threshold) {
@@ -83,26 +84,26 @@ test("average grouping blocks chain merges through a single similar vector", () 
   assert.equal(groups.length,2);assert.ok(!groups.some(g=>g.photos.includes("0")&&g.photos.includes("2")));
 });
 
-test("grouping and reference lookup both default to the inclusive 0.40 threshold", () => {
+test("seed grouping and reference lookup use the inclusive fusion threshold", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  for(const similarity of[.23,.35,.39,.40,.41]){
+  for(const similarity of[.35,.47,.48,.49]){
     const faces=[{descriptor:[1,0]},{descriptor:[similarity,Math.sqrt(1-similarity**2)]}];
     const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
     const groups=[];
-    photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid));
-    assert.equal(groups.length,similarity>=.40?1:2,`grouping at ${similarity}`);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.40?["one","two"]:["one"],`reference lookup at ${similarity}`);
+    photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid,.48));
+    assert.equal(groups.length,similarity>=.48?1:2,`grouping at ${similarity}`);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos),similarity>=.48?["one","two"]:["one"],`reference lookup at ${similarity}`);
   }
 });
 test("slider thresholds update grouping and reference matches using the same cached features", () => {
   const photos=[{docid:"one",rev:"r"},{docid:"two",rev:"r"}];
-  const faces=[{descriptor:[1,0]},{descriptor:[.2,Math.sqrt(1-.2**2)]}];
+  const faces=[{descriptor:[1,0]},{descriptor:[.4,Math.sqrt(1-.4**2)]}];
   const indices=new Map(photos.map((photo,i)=>[faceIndexKey(photo),[faces[i]]]));
-  for (const threshold of [.1,.15,.2,.23,.8,.15]) {
+  for (const threshold of [.3,.35,.4,.48,.8,.35]) {
     const groups=[];
     photos.forEach((photo,i)=>groupDetectedFaces(groups,[faces[i]],photo.docid,threshold));
-    assert.equal(groups.length,threshold<=.2?1:2);
-    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,threshold),threshold<=.2?["one","two"]:["one"]);
+    assert.equal(groups.length,threshold<=.4?1:2);
+    assert.deepEqual(referencePhotoIds([faces[0]],indices,photos,threshold),threshold<=.4?["one","two"]:["one"]);
   }
   // Even at the loosest setting two faces in a single photo remain separate.
   const groups=[];
@@ -166,8 +167,8 @@ test("stop is honored before loading or decoding any original or models", async 
 });
 test("index validation binds cached vectors to the exact photo revision", () => {
   const file={docid:"gns://root/photo",rev:"one"};
-  const face={descriptor:Array(128).fill(1/Math.sqrt(128)),box:[0,0,100,100],avatar:"data:image/jpeg;base64,AA=="};
-  const record={version:3,engine:FACE_ENGINE,...file,faces:[face]};
+  const face={descriptor:Array(512).fill(1/Math.sqrt(512)),box:[0,0,100,100],avatar:"data:image/jpeg;base64,AA==",landmarks:ALIGN_POINTS,yawProxy:0,detectorScore:.95,sharpness:100};
+  const record={version:4,engine:FACE_ENGINE,...file,faces:[face]};
   assert.equal(validateFaceIndex(record,file).length,1);
   assert.throws(()=>validateFaceIndex(record,{...file,rev:"two"}));
   assert.throws(()=>validateFaceIndex({...record,faces:[{...face,descriptor:[1,2]}]},file));
