@@ -1,12 +1,14 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ScanFace, X, Upload } from "lucide-react";
 import { originalPhotoBlob } from "./westlake.js";
-import { faceIndexKey, loadFaceIndices, saveFaceIndex, referencePhotoIds, needsFaceDetailsUpdate, needsFusionUpgrade } from "./face-cache.js";
+import { faceIndexKey, loadFaceIndices, saveFaceIndex, needsFaceDetailsUpdate, needsFusionUpgrade } from "./face-cache.js";
 import { indexedFaces } from "./people.js";
 import { loadReviews, saveReview } from "./people-review.js";
 import { prepareCachedPhoto, finishCachedPhoto } from "./analysis-cache.js";
 import { createPhotoPool, supportsPhotoWorkers } from "./photo-pool.js";
 import { runConcurrentPhotos, recommendedPhotoConcurrency, normalizePhotoConcurrency } from "./concurrent-photos.js";
+import { buildReferenceProfiles, matchReferencePerson } from "./reference-people.js";
+import ReferencePeople from "./ReferencePeople.jsx";
 import PeoplePanel from "./PeoplePanel.jsx";
 import PeopleWorker from "./people-worker.js?worker&inline";
 import { photoLabel } from "./upload.js";
@@ -33,6 +35,7 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
   const [review, setReview] = useState({ assignments: {}, names: {} });
   const [model, setModel] = useState(EMPTY_PEOPLE);
   const [grouping, setGrouping] = useState(false);
+  const [groupedInput,setGroupedInput] = useState(null);
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
@@ -52,6 +55,7 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
     return () => { operation.current?.abort(); operation.current = null; };
   }, [signature, scope]);
   const faces = useMemo(() => indexedFaces(photos, indices, diagnostics), [indices, diagnostics, signature]);
+  const groupingInput=useMemo(()=>({faces,threshold,review}),[faces,threshold,review]);
   useEffect(() => {
     if (!loaded) return;
     let worker;
@@ -60,9 +64,9 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
       worker.onmessage=({data})=>{
         if(data.requestId!==groupingRequest.current)return;
         setGrouping(false);
-        if(data.error){setModel(EMPTY_PEOPLE);setError(data.error);}else setModel(data.result);
+        if(data.error){setModel(EMPTY_PEOPLE);setGroupedInput(null);setError(data.error);}else {setModel(data.result);setGroupedInput(worker.pendingInput);}
       };
-      worker.onerror=()=>{setGrouping(false);setModel(EMPTY_PEOPLE);setError("人物分组失败，请刷新后重试");};
+      worker.onerror=()=>{setGrouping(false);setModel(EMPTY_PEOPLE);setGroupedInput(null);setError("人物分组失败，请刷新后重试");};
       // The next effect sends the initial snapshot once. Later threshold and
       // review changes reuse both the worker and its exact similarity matrix.
       worker.faceSnapshot=null;
@@ -70,28 +74,34 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
     return ()=>{groupingRequest.current++;worker?.terminate();groupingWorker.current=null;};
   },[loaded]);
   useEffect(()=>{
-    const worker=groupingWorker.current;if(!worker||busy)return;
+    const worker=groupingWorker.current;if(!worker||busy||groupedInput===groupingInput)return;
     const requestId=++groupingRequest.current;setGrouping(true);
     const timer=setTimeout(()=>{
+      worker.pendingInput=groupingInput;
       worker.postMessage({requestId,threshold,review,...(worker.faceSnapshot!==faces?{faces}:{})});worker.faceSnapshot=faces;
     },120);
     return ()=>{clearTimeout(timer);groupingRequest.current++;};
-  },[faces,threshold,review,loaded,busy]);
-  useEffect(() => {
-    if (!active.startsWith("reference-")) return;
-    const face = references[Number(active.slice("reference-".length))];
-    if (!face) return;
-    const excluded = new Set(Object.keys(review.assignments).filter(key => review.assignments[key] === "ignore"));
-    const matches = referencePhotoIds([face], indices, photos, threshold, excluded);
-    onFilter(matches, `参照人脸 ${Number(active.slice("reference-".length)) + 1}`);
-    const remaining=photos.filter(p=>needsFusionUpgrade(indices.get(faceIndexKey(p)),diagnostics.get(faceIndexKey(p)))).length;
-    setStatus(`找到 ${matches.length} 张相似照片。${face.descriptor.length===512&&remaining?`另有 ${remaining} 张照片尚未升级融合索引，暂不参与此次比对。`:""}结果可能有遗漏或误匹配，请人工确认。`);
-  }, [threshold, indices, diagnostics, signature, active, references, review]);
+  },[groupingInput,groupedInput,loaded,busy]);
+  const modelReady=loaded&&!grouping&&groupedInput===groupingInput;
+  const referenceProfiles=useMemo(()=>buildReferenceProfiles(model.groups,photos.map(p=>p.docid),new Set(Object.keys(review.assignments).filter(key=>review.assignments[key]==="ignore"))),[model,signature,review]);
+  const referenceMatch=useMemo(()=>active.startsWith("reference-")?matchReferencePerson(references[Number(active.slice("reference-".length))],referenceProfiles,threshold):null,[active,references,referenceProfiles,threshold]);
+  useEffect(()=>{
+    if(!referenceMatch||!modelReady||busy)return;
+    const selected=referenceMatch.candidates.find(g=>g.id===referenceMatch.automatic);
+    if(selected){
+      onFilter(selected.photos,selected.name);
+      setStatus(`已匹配到「${selected.name}」，显示该人物类别的全部 ${selected.photos.length} 张照片。`);
+    }else{
+      onFilter(null);
+      setStatus(referenceMatch.candidates.length?"找到相近的人物类别，请选择你自己；不会自动合并不同人物。":"未匹配到可靠人物类别，请更换参照照片或在人物列表中选择。");
+    }
+  },[referenceMatch,modelReady,busy]);
   function changeThreshold(value) {
     const next = normalizeMatchThreshold(value);
     setThreshold(next);
     try { localStorage.setItem(MATCH_PREFERENCE, String(next)); } catch { /* Browsing still works without storage. */ }
-    if (!active.startsWith("reference-")) { setActive(""); onFilter(null); }
+    if (!active.startsWith("reference-")) setActive("");
+    onFilter(null);
   }
   const indexed = photos.filter(p => indices.has(faceIndexKey(p))).length;
 
@@ -194,7 +204,7 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
       const { analyzePhoto } = await import("./faces.js");
       const faces = await analyzePhoto({ url }, { signal: abort.signal, onProgress: message => { if (!abort.signal.aborted) setStatus(`参照照片 · ${message}`); } });
       if (abort.signal.aborted) return;
-      setReferences(faces); setStatus(faces.length ? "请选择参照照片中的一张人脸，查看相似照片。" : "参照照片未检测到清晰人脸，请换一张正面照片。");
+      setReferences(faces); setStatus(faces.length ? "请选择参照照片中的你，匹配已分类人物并查看该人物全部照片。" : "参照照片未检测到清晰人脸，请换一张正面照片。");
     } catch (e) { if (!abort.signal.aborted) setError(e.message); }
     finally { URL.revokeObjectURL(url); if (operation.current === abort) setBusy(false); }
   }
@@ -209,11 +219,12 @@ export default function PersonFinder({ session, album, photos, onFilter, resetSe
       {loaded && upgrades > 0 && <label className="upload-help">同时处理照片数 <select aria-label="同时处理照片数" value={concurrency} disabled={busy||!supportsPhotoWorkers()} onChange={e=>{const n=normalizePhotoConcurrency(e.target.value);setConcurrency(n);try{localStorage.setItem(PHOTO_CONCURRENCY,String(n));}catch{}}}>{[1,2,4,6,8].map(n=><option key={n} value={n}>{n} 路{n===autoConcurrency()?"（自动建议）":""}</option>)}</select> 每路独立检测和识别，完成一张就保存一张。{!supportsPhotoWorkers()&&"此浏览器暂不支持并行图像计算，使用单路。"}</label>}
       {loaded && upgrades > 0 && <div className="fusion-upgrade"><strong>融合索引待建立 · {upgrades} 张照片</strong><p>网站只使用新版索引。原图无需重传，已有人工确认和忽略记录继续保留；按照片保存，可停止后继续。</p><button disabled={busy || !album.canUpload} onClick={()=>buildIndex("fusion")}>建立融合索引（{upgrades} 张）</button>{!album.canUpload && <p>请有上传权限的跑友用电脑完成建立。</p>}</div>}
       {legacyCount > 0 && <p className="upload-help">已升级人脸识别，{legacyCount} 张照片的旧索引需要补建一次，照片无需重新上传。</p>}
-      <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引与纠错</button><button className="subtle" disabled={busy || !loaded || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
+      <div className="finder-actions"><button className="subtle" disabled={busy} onClick={() => { onFilter(null); setActive(""); }}>全部照片</button><button className="subtle" disabled={busy} onClick={readIndex}>刷新索引与纠错</button><button className="subtle" disabled={busy || !modelReady || !indexed} onClick={() => referenceInput.current.click()}><Upload size={16} />选择参照照片</button>{busy && <button className="subtle" onClick={() => { operation.current?.abort(); setStatus("正在停止…"); }}>停止处理</button>}</div>
       <input ref={referenceInput} className="file-picker" type="file" accept=".jpg,.jpeg,.png,.webp" aria-label="选择人脸参照照片" onChange={e => { chooseReference(e.target.files[0]); e.target.value = ""; }} />
-      <p className="upload-help">融合版在本机计算，参照照片不会上传。首次分析需下载约 190 MB 模型和运行文件，建议用电脑建立索引；手机可直接查看共享结果。大侧脸会尝试匹配，但不会保证归入；模糊、过小或未恢复关键点的人脸保留供人工检查。旧模型与新模型的特征不会混比。</p>
+      <p className="upload-help">参照照片仅在本机识别，优先匹配已分类人物，再显示该人物类别的全部照片；不再逐张扫描相册来决定返回哪些照片。首次分析需下载约 190 MB 模型和运行文件，建议用电脑建立索引；手机可直接查看共享结果。大侧脸会尝试匹配，但不会保证归入；模糊、过小或未恢复关键点的人脸保留供人工检查。旧模型与新模型的特征不会混比。</p>
       {status && <p className="face-status" role="status">{status}</p>}{error && <p className="error" role="alert">{error}</p>}
-      {references.length > 0 && <div className="reference-faces"><p>参照照片中的人脸：</p><div className="people">{references.map((face, i) => <button key={i} disabled={busy} className={active === `reference-${i}` ? "selected" : ""} onClick={() => selectReference(face, i)}><img src={face.avatar} alt="" />参照人脸 {i + 1}</button>)}</div></div>}
+      {references.length > 0 && <div className="reference-faces"><p>参照照片中的人脸：</p><div className="people">{references.map((face, i) => <button key={i} disabled={busy||!modelReady} className={active === `reference-${i}` ? "selected" : ""} onClick={() => selectReference(face, i)}><img src={face.avatar} alt="" />参照人脸 {i + 1}</button>)}</div></div>}
+      {modelReady && <ReferencePeople match={referenceMatch} disabled={busy} onChoose={group=>{setActive("");onFilter(group.photos,group.name);setStatus(`显示「${group.name}」类别的全部 ${group.photos.length} 张照片。`);}}/>}
       {loaded && <PeoplePanel key={`${scope}|${signature}|${threshold}`} model={model} faces={faces} disabled={busy || grouping} canEdit={album.canUpload} onFilter={(ids, name) => { setActive(""); onFilter(ids, name); }} onSave={persistReview} />}
       {loaded && <details className="face-review-section"><summary>逐张照片检测状态 · {photos.length} 张</summary>{photos.map(photo => {
         const key = faceIndexKey(photo), detail = diagnostics.get(key), indexed = indices.has(key);
